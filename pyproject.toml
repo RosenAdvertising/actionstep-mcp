@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "actionstep-mcp"
+version = "0.1.0"
+description = "MCP server for Actionstep API — full coverage for law firm practice management"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["actionstep", "mcp", "legal", "law", "claude", "practice-management"]
+dependencies = [
+    "mcp>=1.0.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+actionstep-mcp = "actionstep_mcp.server:main"
+actionstep-mcp-setup = "actionstep_mcp.setup.oauth_flow:main"
+actionstep-mcp-verify = "actionstep_mcp.setup.verify:main"
+
+[project.urls]
+Homepage = "https://github.com/rosenadvertising/actionstep-mcp"
+Issues = "https://github.com/rosenadvertising/actionstep-mcp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["actionstep_mcp"]

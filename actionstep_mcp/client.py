@@ -169,7 +169,10 @@ class ActionstepClient:
         return self.get(f"actions/{action_id}")
 
     def create_action(self, name, action_type_id, **fields):
-        data = {"name": name, "links": {"actionType": str(action_type_id)}, **fields}
+        data = {"name": name, "links": {"actionType": str(action_type_id)}}
+        if "links" in fields:
+            data["links"].update(fields.pop("links"))
+        data.update(fields)
         return self.post("actions", "actions", data)
 
     def update_action(self, action_id, **fields):
@@ -223,7 +226,10 @@ class ActionstepClient:
         return self.get(f"actiondocuments/{document_id}")
 
     def create_action_document(self, action_id, **fields):
-        data = {"links": {"action": str(action_id)}, **fields}
+        data = {"links": {"action": str(action_id)}}
+        if "links" in fields:
+            data["links"].update(fields.pop("links"))
+        data.update(fields)
         return self.post("actiondocuments", "actiondocuments", data)
 
     def update_action_document(self, document_id, **fields):
@@ -303,7 +309,10 @@ class ActionstepClient:
         return self.get(f"actionrates/{rate_id}")
 
     def create_action_rate(self, action_id, **fields):
-        data = {"links": {"action": str(action_id)}, **fields}
+        data = {"links": {"action": str(action_id)}}
+        if "links" in fields:
+            data["links"].update(fields.pop("links"))
+        data.update(fields)
         return self.post("actionrates", "actionrates", data)
 
     def update_action_rate(self, rate_id, **fields):

@@ -130,7 +130,13 @@ class ActionstepClient:
         if not resp.ok:
             raise RuntimeError(f"Actionstep API error {resp.status_code}: {resp.text[:400]}")
 
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            raise RuntimeError(
+                f"Actionstep API returned non-JSON response ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
 
     def get(self, path, params=None):
         return self._request("GET", path, params=params)
@@ -169,11 +175,13 @@ class ActionstepClient:
         return self.get(f"actions/{action_id}")
 
     def create_action(self, name, action_type_id, **fields):
-        data = {"name": name, "links": {"actionType": str(action_type_id)}}
+        # Actionstep uses /actioncreate/{action_type_id} for creation,
+        # with key "actioncreate" and field "actionName".
+        data = {"actionName": name, "links": {"actionType": str(action_type_id)}}
         if "links" in fields:
             data["links"].update(fields.pop("links"))
         data.update(fields)
-        return self.post("actions", "actions", data)
+        return self.post(f"actioncreate/{action_type_id}", "actioncreate", data)
 
     def update_action(self, action_id, **fields):
         return self.put(f"actions/{action_id}", "actions", fields)
@@ -209,10 +217,14 @@ class ActionstepClient:
         params = {}
         if action_id:
             params["action"] = action_id
-        return self.get("actionchangesteps", params)
+        return self.get("actionchangestep", params)
 
-    def update_action_change_step(self, step_id, **fields):
-        return self.put(f"actionchangesteps/{step_id}", "actionchangesteps", fields)
+    def create_action_change_step(self, action_id, step_id, node_id=None):
+        """Transition an action to a new workflow step (POST to actionchangestep)."""
+        links = {"action": str(action_id), "step": str(step_id)}
+        if node_id:
+            links["node"] = str(node_id)
+        return self.post("actionchangestep", "actionchangestep", {"links": links})
 
     # ── Action Documents ──────────────────────────────────────────────────────
 
@@ -226,9 +238,13 @@ class ActionstepClient:
         return self.get(f"actiondocuments/{document_id}")
 
     def create_action_document(self, action_id, **fields):
+        # Note: API uses "name" for the document name (not "fileName")
         data = {"links": {"action": str(action_id)}}
         if "links" in fields:
             data["links"].update(fields.pop("links"))
+        # Remap fileName -> name if passed
+        if "fileName" in fields:
+            fields["name"] = fields.pop("fileName")
         data.update(fields)
         return self.post("actiondocuments", "actiondocuments", data)
 
@@ -476,10 +492,13 @@ class ActionstepClient:
         return self.get(f"contactnotes/{note_id}")
 
     def create_contact_note(self, participant_id, note, **fields):
-        data = {"note": note, "links": {"participant": str(participant_id)}, **fields}
+        # API field is "text", not "note"
+        data = {"text": note, "links": {"participant": str(participant_id)}, **fields}
         return self.post("contactnotes", "contactnotes", data)
 
     def update_contact_note(self, note_id, **fields):
+        if "note" in fields:
+            fields["text"] = fields.pop("note")
         return self.put(f"contactnotes/{note_id}", "contactnotes", fields)
 
     def delete_contact_note(self, note_id):
@@ -530,10 +549,14 @@ class ActionstepClient:
         return self.get(f"filenotes/{note_id}")
 
     def create_file_note(self, action_id, note, **fields):
-        data = {"note": note, "links": {"action": str(action_id)}, **fields}
+        # API field is "text", not "note"
+        data = {"text": note, "links": {"action": str(action_id)}, **fields}
         return self.post("filenotes", "filenotes", data)
 
     def update_file_note(self, note_id, **fields):
+        # Remap "note" kwarg to "text" if passed
+        if "note" in fields:
+            fields["text"] = fields.pop("note")
         return self.put(f"filenotes/{note_id}", "filenotes", fields)
 
     def delete_file_note(self, note_id):
@@ -548,9 +571,12 @@ class ActionstepClient:
         return self.get(f"scratchnotes/{note_id}")
 
     def create_scratch_note(self, note, **fields):
-        return self.post("scratchnotes", "scratchnotes", {"note": note, **fields})
+        # API field is "text", not "note"
+        return self.post("scratchnotes", "scratchnotes", {"text": note, **fields})
 
     def update_scratch_note(self, note_id, **fields):
+        if "note" in fields:
+            fields["text"] = fields.pop("note")
         return self.put(f"scratchnotes/{note_id}", "scratchnotes", fields)
 
     def delete_scratch_note(self, note_id):
@@ -628,8 +654,9 @@ class ActionstepClient:
         return self.get(f"disbursements/{disbursement_id}")
 
     def create_disbursement(self, action_id, amount, description="", **fields):
+        # API field is "unitPrice" (not "amount")
         data = {
-            "amount": amount,
+            "unitPrice": amount,
             "links": {"action": str(action_id)},
             **fields,
         }
@@ -654,13 +681,27 @@ class ActionstepClient:
     def get_calendar_appointment(self, appt_id):
         return self.get(f"calendarappointments/{appt_id}")
 
-    def create_calendar_appointment(self, subject, start, end, action_id=None, **fields):
-        data = {"subject": subject, "start": start, "end": end, **fields}
+    def create_calendar_appointment(self, subject, start, end, action_id=None,
+                                     calendar_id=None, **fields):
+        # API fields: "title", "startTimestamp", "endTimestamp" (not subject/start/end)
+        data = {"title": subject, "startTimestamp": start, "endTimestamp": end, **fields}
+        links = {}
         if action_id:
-            data["links"] = {"action": str(action_id)}
+            links["action"] = str(action_id)
+        if calendar_id:
+            links["calendar"] = str(calendar_id)
+        if links:
+            data["links"] = links
         return self.post("calendarappointments", "calendarappointments", data)
 
     def update_calendar_appointment(self, appt_id, **fields):
+        # Remap field names if callers use old names
+        if "subject" in fields:
+            fields["title"] = fields.pop("subject")
+        if "start" in fields:
+            fields["startTimestamp"] = fields.pop("start")
+        if "end" in fields:
+            fields["endTimestamp"] = fields.pop("end")
         return self.put(f"calendarappointments/{appt_id}", "calendarappointments", fields)
 
     def delete_calendar_appointment(self, appt_id):
@@ -678,7 +719,8 @@ class ActionstepClient:
         return self.get(f"emails/{email_id}")
 
     def create_email(self, subject, body, to_address, action_id=None, **fields):
-        data = {"subject": subject, "body": body, "toAddress": to_address, **fields}
+        # API fields: "subject", "bodyText", "to" (not body/toAddress)
+        data = {"subject": subject, "bodyText": body, "to": to_address, **fields}
         if action_id:
             data["links"] = {"action": str(action_id)}
         return self.post("emails", "emails", data)
@@ -737,9 +779,10 @@ class ActionstepClient:
         return self.get(f"sms/{sms_id}")
 
     def create_sms(self, message, to_number, action_id=None, **fields):
-        data = {"message": message, "toNumber": to_number, **fields}
+        # API fields: "text" (not message), "number" (not toNumber)
+        data = {"text": message, "number": to_number, **fields}
         if action_id:
-            data["links"] = {"action": str(action_id)}
+            data.setdefault("links", {})["action"] = str(action_id)
         return self.post("sms", "sms", data)
 
     def update_sms(self, sms_id, **fields):

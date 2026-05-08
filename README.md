@@ -1,6 +1,6 @@
 # actionstep-mcp
 
-MCP server for [Actionstep](https://actionstep.com) — full API coverage for law firm practice management. Use Actionstep from Claude Desktop with natural language.
+MCP server for [Actionstep](https://actionstep.com) — 144 tools covering the full Actionstep REST API for law firm practice management. Use Actionstep from Claude Desktop with natural language.
 
 ## What you can do
 

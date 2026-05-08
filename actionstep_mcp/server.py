@@ -171,11 +171,11 @@ def list_action_change_steps(action_id: str = "") -> str:
 
 
 @mcp.tool()
-def update_action_change_step(step_id: str, new_step_id: str) -> str:
-    """Move an action to a new workflow step."""
+def transition_action_step(action_id: str, step_id: str, node_id: str = "") -> str:
+    """Transition an action to a new workflow step. action_id: the matter ID. step_id: the target step ID."""
     try:
-        return json.dumps(ActionstepClient().update_action_change_step(
-            step_id, newStep=new_step_id), indent=2)
+        return json.dumps(ActionstepClient().create_action_change_step(
+            action_id, step_id, node_id=node_id or None), indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)}, indent=2)
 
@@ -1049,7 +1049,7 @@ def update_disbursement(disbursement_id: str, amount: float = 0.0,
     try:
         fields = {}
         if amount:
-            fields["amount"] = amount
+            fields["unitPrice"] = amount
         if description:
             fields["description"] = description
         return json.dumps(ActionstepClient().update_disbursement(

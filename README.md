@@ -1,5 +1,9 @@
 # actionstep-mcp
 
+[![PyPI version](https://img.shields.io/pypi/v/actionstep-mcp.svg)](https://pypi.org/project/actionstep-mcp/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 MCP server for [Actionstep](https://actionstep.com) — 144 tools covering the full Actionstep REST API for law firm practice management. Use Actionstep from Claude Desktop with natural language.
 
 ## What you can do

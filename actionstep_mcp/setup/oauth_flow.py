@@ -32,11 +32,15 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
-            self.wfile.write(b"<h2>Authorization complete. You can close this tab.</h2>")
+            self.wfile.write(
+                b"<h2>Authorization complete. You can close this tab.</h2>"
+            )
         else:
             self.send_response(400)
             self.end_headers()
-            self.wfile.write(b"<h2>No code received. Check Actionstep app settings.</h2>")
+            self.wfile.write(
+                b"<h2>No code received. Check Actionstep app settings.</h2>"
+            )
 
     def log_message(self, *args):
         pass
@@ -60,7 +64,7 @@ def main():
     }
     auth_url_full = f"{AUTH_URL}?{urlencode(auth_params)}"
 
-    print(f"\nOpening browser for Actionstep authorization...")
+    print("\nOpening browser for Actionstep authorization...")
     print(f"If the browser doesn't open, visit:\n{auth_url_full}\n")
     webbrowser.open(auth_url_full)
 
@@ -73,13 +77,16 @@ def main():
         sys.exit(1)
 
     print("Exchanging code for tokens...")
-    resp = requests.post(TOKEN_URL, data={
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "grant_type": "authorization_code",
-        "code": _auth_code,
-        "redirect_uri": REDIRECT_URI,
-    })
+    resp = requests.post(
+        TOKEN_URL,
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "authorization_code",
+            "code": _auth_code,
+            "redirect_uri": REDIRECT_URI,
+        },
+    )
 
     if resp.status_code != 200:
         print(f"Token exchange failed ({resp.status_code}): {resp.text}")

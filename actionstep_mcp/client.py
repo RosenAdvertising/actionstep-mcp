@@ -83,13 +83,18 @@ class TokenManager:
         if not self.refresh_token:
             raise RuntimeError("No refresh token. Run: actionstep-mcp-setup")
         if not CLIENT_ID or not CLIENT_SECRET:
-            raise RuntimeError("ACTIONSTEP_CLIENT_ID and ACTIONSTEP_CLIENT_SECRET are required. Run: actionstep-mcp-setup")
-        resp = requests.post(TOKEN_URL, data={
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "grant_type": "refresh_token",
-            "refresh_token": self.refresh_token,
-        })
+            raise RuntimeError(
+                "ACTIONSTEP_CLIENT_ID and ACTIONSTEP_CLIENT_SECRET are required. Run: actionstep-mcp-setup"
+            )
+        resp = requests.post(
+            TOKEN_URL,
+            data={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type": "refresh_token",
+                "refresh_token": self.refresh_token,
+            },
+        )
         if resp.status_code == 200:
             new_tokens = _json_response(resp)
             if "refresh_token" not in new_tokens:
@@ -108,48 +113,61 @@ class ActionstepClient:
         self.tm = TokenManager()
         # api_endpoint: env var takes priority, then token, then error
         self.api_endpoint = (
-            API_ENDPOINT
-            or self.tm.tokens.get("api_endpoint", "")
+            API_ENDPOINT or self.tm.tokens.get("api_endpoint", "")
         ).rstrip("/")
         if not self.api_endpoint:
             raise RuntimeError(
                 "ACTIONSTEP_API_ENDPOINT not set. Run: actionstep-mcp-setup"
             )
         if not self.tm.access_token and not self.tm.refresh_token:
-            raise RuntimeError("No Actionstep OAuth tokens found. Run: actionstep-mcp-setup")
+            raise RuntimeError(
+                "No Actionstep OAuth tokens found. Run: actionstep-mcp-setup"
+            )
         self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Bearer {self.tm.access_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        })
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {self.tm.access_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+        )
 
     def _url(self, path):
         return f"{self.api_endpoint}{API_PREFIX}/{path.lstrip('/')}"
 
-    def _request(self, method, path, params=None, json_body=None,
-                 retry=True, _rate_retries=0):
+    def _request(
+        self, method, path, params=None, json_body=None, retry=True, _rate_retries=0
+    ):
         url = self._url(path)
         resp = self.session.request(method, url, params=params, json=json_body)
 
         if resp.status_code == 401 and retry:
             self.tm.refresh()
             self.session.headers["Authorization"] = f"Bearer {self.tm.access_token}"
-            return self._request(method, path, params=params, json_body=json_body,
-                                  retry=False)
+            return self._request(
+                method, path, params=params, json_body=json_body, retry=False
+            )
 
         if resp.status_code == 429 and _rate_retries < 3:
             retry_after = _retry_after_seconds(resp)
             print(f"Rate limited. Waiting {retry_after}s...", file=sys.stderr)
             time.sleep(retry_after)
-            return self._request(method, path, params=params, json_body=json_body,
-                                  retry=retry, _rate_retries=_rate_retries + 1)
+            return self._request(
+                method,
+                path,
+                params=params,
+                json_body=json_body,
+                retry=retry,
+                _rate_retries=_rate_retries + 1,
+            )
 
         if resp.status_code in (204, 200) and not resp.content:
             return {"success": True}
 
         if not resp.ok:
-            raise RuntimeError(f"Actionstep API error {resp.status_code}: {resp.text[:400]}")
+            raise RuntimeError(
+                f"Actionstep API error {resp.status_code}: {resp.text[:400]}"
+            )
 
         return _json_response(resp)
 
@@ -224,7 +242,9 @@ class ActionstepClient:
         return self.get(f"actionbillsettings/{settings_id}")
 
     def update_action_bill_settings(self, settings_id, **fields):
-        return self.put(f"actionbillsettings/{settings_id}", "actionbillsettings", fields)
+        return self.put(
+            f"actionbillsettings/{settings_id}", "actionbillsettings", fields
+        )
 
     # ── Action Change Steps ───────────────────────────────────────────────────
 
@@ -281,8 +301,11 @@ class ActionstepClient:
         return self.get(f"actionfolders/{folder_id}")
 
     def create_action_folder(self, action_id, name):
-        return self.post("actionfolders", "actionfolders",
-                         {"name": name, "links": {"action": str(action_id)}})
+        return self.post(
+            "actionfolders",
+            "actionfolders",
+            {"name": name, "links": {"action": str(action_id)}},
+        )
 
     def update_action_folder(self, folder_id, **fields):
         return self.put(f"actionfolders/{folder_id}", "actionfolders", fields)
@@ -364,8 +387,11 @@ class ActionstepClient:
         return self.get(f"actiontypefolders/{folder_id}")
 
     def create_action_type_folder(self, action_type_id, name):
-        return self.post("actiontypefolders", "actiontypefolders",
-                         {"name": name, "links": {"actionType": str(action_type_id)}})
+        return self.post(
+            "actiontypefolders",
+            "actiontypefolders",
+            {"name": name, "links": {"actionType": str(action_type_id)}},
+        )
 
     def update_action_type_folder(self, folder_id, **fields):
         return self.put(f"actiontypefolders/{folder_id}", "actiontypefolders", fields)
@@ -381,8 +407,9 @@ class ActionstepClient:
     def get_participant(self, participant_id):
         return self.get(f"participants/{participant_id}")
 
-    def create_participant(self, first_name="", last_name="", company_name="",
-                           is_company=False, **fields):
+    def create_participant(
+        self, first_name="", last_name="", company_name="", is_company=False, **fields
+    ):
         data = {"isCompany": "T" if is_company else "F", **fields}
         if first_name:
             data["firstName"] = first_name
@@ -407,7 +434,9 @@ class ActionstepClient:
         return self.get(f"participanttypes/{pt_id}")
 
     def create_participant_type(self, name, **fields):
-        return self.post("participanttypes", "participanttypes", {"name": name, **fields})
+        return self.post(
+            "participanttypes", "participanttypes", {"name": name, **fields}
+        )
 
     def update_participant_type(self, pt_id, **fields):
         return self.put(f"participanttypes/{pt_id}", "participanttypes", fields)
@@ -421,12 +450,18 @@ class ActionstepClient:
         return self.get(f"participantrelationshiptypes/{rt_id}")
 
     def create_participant_relationship_type(self, name, **fields):
-        return self.post("participantrelationshiptypes", "participantrelationshiptypes",
-                         {"name": name, **fields})
+        return self.post(
+            "participantrelationshiptypes",
+            "participantrelationshiptypes",
+            {"name": name, **fields},
+        )
 
     def update_participant_relationship_type(self, rt_id, **fields):
-        return self.put(f"participantrelationshiptypes/{rt_id}",
-                        "participantrelationshiptypes", fields)
+        return self.put(
+            f"participantrelationshiptypes/{rt_id}",
+            "participantrelationshiptypes",
+            fields,
+        )
 
     # ── Contact Relationships ─────────────────────────────────────────────────
 
@@ -439,8 +474,9 @@ class ActionstepClient:
     def get_contact_relationship(self, cr_id):
         return self.get(f"contactrelationships/{cr_id}")
 
-    def create_contact_relationship(self, participant1_id, participant2_id,
-                                     relationship_type_id):
+    def create_contact_relationship(
+        self, participant1_id, participant2_id, relationship_type_id
+    ):
         data = {
             "links": {
                 "participant1": str(participant1_id),
@@ -486,8 +522,11 @@ class ActionstepClient:
         return self.get(f"contactfolders/{folder_id}")
 
     def create_contact_folder(self, participant_id, name):
-        return self.post("contactfolders", "contactfolders",
-                         {"name": name, "links": {"participant": str(participant_id)}})
+        return self.post(
+            "contactfolders",
+            "contactfolders",
+            {"name": name, "links": {"participant": str(participant_id)}},
+        )
 
     def update_contact_folder(self, folder_id, **fields):
         return self.put(f"contactfolders/{folder_id}", "contactfolders", fields)
@@ -532,8 +571,9 @@ class ActionstepClient:
     def get_task(self, task_id):
         return self.get(f"tasks/{task_id}")
 
-    def create_task(self, name, action_id=None, assignee_id=None,
-                    due_date=None, **fields):
+    def create_task(
+        self, name, action_id=None, assignee_id=None, due_date=None, **fields
+    ):
         data = {"name": name, **fields}
         links = {}
         if action_id:
@@ -654,8 +694,9 @@ class ActionstepClient:
         return self.get(f"timerecordactivities/{activity_id}")
 
     def create_time_record_activity(self, name, **fields):
-        return self.post("timerecordactivities", "timerecordactivities",
-                         {"name": name, **fields})
+        return self.post(
+            "timerecordactivities", "timerecordactivities", {"name": name, **fields}
+        )
 
     # ── Disbursements ─────────────────────────────────────────────────────────
 
@@ -696,10 +737,16 @@ class ActionstepClient:
     def get_calendar_appointment(self, appt_id):
         return self.get(f"calendarappointments/{appt_id}")
 
-    def create_calendar_appointment(self, subject, start, end, action_id=None,
-                                     calendar_id=None, **fields):
+    def create_calendar_appointment(
+        self, subject, start, end, action_id=None, calendar_id=None, **fields
+    ):
         # API fields: "title", "startTimestamp", "endTimestamp" (not subject/start/end)
-        data = {"title": subject, "startTimestamp": start, "endTimestamp": end, **fields}
+        data = {
+            "title": subject,
+            "startTimestamp": start,
+            "endTimestamp": end,
+            **fields,
+        }
         links = {}
         if action_id:
             links["action"] = str(action_id)
@@ -717,7 +764,9 @@ class ActionstepClient:
             fields["startTimestamp"] = fields.pop("start")
         if "end" in fields:
             fields["endTimestamp"] = fields.pop("end")
-        return self.put(f"calendarappointments/{appt_id}", "calendarappointments", fields)
+        return self.put(
+            f"calendarappointments/{appt_id}", "calendarappointments", fields
+        )
 
     def delete_calendar_appointment(self, appt_id):
         return self.delete(f"calendarappointments/{appt_id}")
@@ -815,7 +864,11 @@ class ActionstepClient:
         return self.get(f"phonerecords/{record_id}")
 
     def create_phone_record(self, participant_id, number, phone_type="", **fields):
-        data = {"number": number, "links": {"participant": str(participant_id)}, **fields}
+        data = {
+            "number": number,
+            "links": {"participant": str(participant_id)},
+            **fields,
+        }
         if phone_type:
             data["phoneType"] = phone_type
         return self.post("phonerecords", "phonerecords", data)
@@ -838,9 +891,11 @@ class ActionstepClient:
         return self.get(f"quickcodes/{code_id}")
 
     def create_quick_code(self, code, description, code_type, **fields):
-        return self.post("quickcodes", "quickcodes",
-                         {"code": code, "description": description,
-                          "codeType": code_type, **fields})
+        return self.post(
+            "quickcodes",
+            "quickcodes",
+            {"code": code, "description": description, "codeType": code_type, **fields},
+        )
 
     def update_quick_code(self, code_id, **fields):
         return self.put(f"quickcodes/{code_id}", "quickcodes", fields)
@@ -875,13 +930,17 @@ class ActionstepClient:
 
     def create_data_collection_field(self, dc_id, name, field_type, **fields):
         data = {
-            "name": name, "fieldType": field_type,
-            "links": {"dataCollection": str(dc_id)}, **fields
+            "name": name,
+            "fieldType": field_type,
+            "links": {"dataCollection": str(dc_id)},
+            **fields,
         }
         return self.post("datacollectionfields", "datacollectionfields", data)
 
     def update_data_collection_field(self, field_id, **fields):
-        return self.put(f"datacollectionfields/{field_id}", "datacollectionfields", fields)
+        return self.put(
+            f"datacollectionfields/{field_id}", "datacollectionfields", fields
+        )
 
     def delete_data_collection_field(self, field_id):
         return self.delete(f"datacollectionfields/{field_id}")
@@ -904,12 +963,15 @@ class ActionstepClient:
             "links": {
                 "dataCollection": str(dc_id),
                 "action": str(action_id),
-            }, **fields
+            },
+            **fields,
         }
         return self.post("datacollectionrecords", "datacollectionrecords", data)
 
     def update_data_collection_record(self, record_id, **fields):
-        return self.put(f"datacollectionrecords/{record_id}", "datacollectionrecords", fields)
+        return self.put(
+            f"datacollectionrecords/{record_id}", "datacollectionrecords", fields
+        )
 
     def delete_data_collection_record(self, record_id):
         return self.delete(f"datacollectionrecords/{record_id}")
@@ -931,13 +993,18 @@ class ActionstepClient:
             "links": {
                 "dataCollectionRecord": str(record_id),
                 "dataCollectionField": str(field_id),
-            }
+            },
         }
-        return self.post("datacollectionrecordvalues", "datacollectionrecordvalues", data)
+        return self.post(
+            "datacollectionrecordvalues", "datacollectionrecordvalues", data
+        )
 
     def update_data_collection_record_value(self, value_id, value):
-        return self.put(f"datacollectionrecordvalues/{value_id}",
-                        "datacollectionrecordvalues", {"value": value})
+        return self.put(
+            f"datacollectionrecordvalues/{value_id}",
+            "datacollectionrecordvalues",
+            {"value": value},
+        )
 
     def delete_data_collection_record_value(self, value_id):
         return self.delete(f"datacollectionrecordvalues/{value_id}")
@@ -951,8 +1018,9 @@ class ActionstepClient:
         return self.get(f"resthooks/{hook_id}")
 
     def create_rest_hook(self, event_name, target_url):
-        return self.post("resthooks", "resthooks",
-                         {"eventName": event_name, "targetUrl": target_url})
+        return self.post(
+            "resthooks", "resthooks", {"eventName": event_name, "targetUrl": target_url}
+        )
 
     def update_rest_hook(self, hook_id, event_name=None, target_url=None):
         data = {}
@@ -1032,9 +1100,11 @@ class ActionstepClient:
         return self.get(f"utbmscodes/{code_id}")
 
     def create_utbms_code(self, code, description, code_type, **fields):
-        return self.post("utbmscodes", "utbmscodes",
-                         {"code": code, "description": description,
-                          "codeType": code_type, **fields})
+        return self.post(
+            "utbmscodes",
+            "utbmscodes",
+            {"code": code, "description": description, "codeType": code_type, **fields},
+        )
 
     def update_utbms_code(self, code_id, **fields):
         return self.put(f"utbmscodes/{code_id}", "utbmscodes", fields)

@@ -36,9 +36,12 @@ def check_api():
         users = user.get("users", user)
         if isinstance(users, list) and users:
             users = users[0]
-        name = (
-            users.get("firstName", "") + " " + users.get("lastName", "")
-        ).strip() or "unknown"
+        if isinstance(users, dict):
+            name = (
+                str(users.get("firstName", "")) + " " + str(users.get("lastName", ""))
+            ).strip() or "unknown"
+        else:
+            name = "unknown"
         print(f"✓ Authenticated as: {name}")
 
         actions = client.list_actions(limit=5)

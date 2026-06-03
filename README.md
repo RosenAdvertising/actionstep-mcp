@@ -68,13 +68,13 @@ Actionstep uses a dynamic `api_endpoint` — the URL for your organisation's API
 ## Example usage in Claude
 
 > "List my open actions"
-
+>
 > "Create a task on action 456 — send retainer agreement to client"
-
+>
 > "Log 2.5 hours on action 789, description: drafted statement of claim"
-
+>
 > "Add a file note on action 123 — client called re: mediation date"
-
+>
 > "Create a calendar appointment for the Jones hearing on Monday 10am"
 
 ## License

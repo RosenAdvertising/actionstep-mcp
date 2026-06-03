@@ -240,7 +240,7 @@ def get_action_document(document_id: str) -> str:
 def create_action_document(action_id: str, file_name: str, folder_id: str = "") -> str:
     """Attach a document to an action."""
     try:
-        fields = {"fileName": file_name}
+        fields: dict[str, str | dict[str, str]] = {"fileName": file_name}
         if folder_id:
             fields["links"] = {"actionFolder": folder_id}
         return json.dumps(
@@ -409,7 +409,7 @@ def create_action_rate(
 ) -> str:
     """Set a billing rate on an action."""
     try:
-        fields = {"rate": rate}
+        fields: dict[str, float | dict[str, str]] = {"rate": rate}
         if participant_type_id:
             fields["links"] = {"participantType": participant_type_id}
         return json.dumps(

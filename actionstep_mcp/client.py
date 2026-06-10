@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Actionstep API client. OAuth 2.0 auth code flow, dynamic api_endpoint, wrapped body format."""
 
+import ipaddress
 import json
 import os
 import sys
 import time
+import urllib.parse
 import requests
 from pathlib import Path
 from datetime import datetime, timezone
+
+from actionstep_mcp import credentials
 
 AUTH_BASE = "https://go.actionstep.com"
 REDIRECT_URI = "http://127.0.0.1:8769/callback"
@@ -17,19 +21,66 @@ AUTH_URL = f"{AUTH_BASE}/oauth/authorize"
 CONFIG_DIR = Path.home() / ".actionstep-mcp"
 API_PREFIX = "/api/rest"
 
+# Resolve credentials through the pluggable store (OS keyring -> .env file).
+credentials.load_into_environ(
+    ["ACTIONSTEP_CLIENT_ID", "ACTIONSTEP_CLIENT_SECRET", "ACTIONSTEP_API_ENDPOINT"]
+)
 
-def _load_env():
-    env_file = CONFIG_DIR / ".env"
-    if env_file.exists():
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, val = line.split("=", 1)
-                    os.environ.setdefault(key.strip(), val.strip())
+# Private/reserved address ranges that must not receive webhook payloads (SSRF hygiene).
+_PRIVATE_NETS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
 
 
-_load_env()
+def _validate_webhook_url(url: str) -> None:
+    """Raise ValueError if url is not a safe https endpoint for webhook delivery.
+
+    Enforces:
+    - scheme must be https (prevents cleartext delivery)
+    - hostname must not resolve to a private, loopback, or link-local address
+      (prevents SSRF — Actionstep posting matter data to an internal service)
+
+    Note: this is a best-effort syntactic check on the literal hostname.  DNS
+    resolution at call time is not performed; a split-horizon DNS attack or a
+    hostname that resolves differently at Actionstep's side is out of scope.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(
+            f"Webhook target_url must use https (got '{parsed.scheme}'). "
+            "Plain-http endpoints would receive Actionstep matter data unencrypted."
+        )
+    hostname = parsed.hostname or ""
+    if not hostname:
+        raise ValueError("Webhook target_url must include a hostname.")
+    # Reject bare IP addresses in private ranges
+    try:
+        addr = ipaddress.ip_address(hostname)
+        for net in _PRIVATE_NETS:
+            if addr in net:
+                raise ValueError(
+                    f"Webhook target_url hostname '{hostname}' is a private/loopback/"
+                    "link-local address. Webhooks must target a firm-controlled public endpoint."
+                )
+    except ValueError as exc:
+        # Re-raise our own ValueError; non-IP hostnames (domain names) pass through
+        if "private" in str(exc) or "loopback" in str(exc) or "link-local" in str(exc):
+            raise
+    # Reject well-known loopback/internal hostnames
+    _BLOCKED_HOSTS = {"localhost", "local", "internal", "metadata.google.internal"}
+    if hostname.lower() in _BLOCKED_HOSTS or hostname.lower().endswith(".local"):
+        raise ValueError(
+            f"Webhook target_url hostname '{hostname}' is a reserved/internal hostname. "
+            "Webhooks must target a firm-controlled public endpoint."
+        )
+
 
 CLIENT_ID = os.environ.get("ACTIONSTEP_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("ACTIONSTEP_CLIENT_SECRET", "")
@@ -1018,6 +1069,7 @@ class ActionstepClient:
         return self.get(f"resthooks/{hook_id}")
 
     def create_rest_hook(self, event_name, target_url):
+        _validate_webhook_url(target_url)
         return self.post(
             "resthooks", "resthooks", {"eventName": event_name, "targetUrl": target_url}
         )
@@ -1027,6 +1079,7 @@ class ActionstepClient:
         if event_name:
             data["eventName"] = event_name
         if target_url:
+            _validate_webhook_url(target_url)
             data["targetUrl"] = target_url
         return self.put(f"resthooks/{hook_id}", "resthooks", data)
 

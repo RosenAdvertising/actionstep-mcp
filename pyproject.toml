@@ -13,6 +13,7 @@ keywords = ["actionstep", "mcp", "legal", "law", "claude", "practice-management"
 dependencies = [
     "mcp>=1.27.2",
     "requests>=2.31.0",
+    "keyring>=25.7.0",
 ]
 
 [project.scripts]

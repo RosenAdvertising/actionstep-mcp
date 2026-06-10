@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """One-command OAuth setup for actionstep-mcp.
 Opens the browser, captures the callback, exchanges the code, saves tokens + api_endpoint.
+
+Credentials (Client ID, Client Secret, API endpoint) are stored securely via the
+OS keyring (macOS Keychain / Windows Credential Manager / Linux Secret Service),
+falling back to a 0600 ``.env`` file when no keyring backend is available or
+``ACTIONSTEP_MCP_USE_KEYRING=0`` is set.
 """
 
 import json
@@ -12,6 +17,8 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse, parse_qs
 
 import requests
+
+from actionstep_mcp import credentials
 
 REDIRECT_URI = "http://127.0.0.1:8769/callback"
 AUTH_BASE = "https://go.actionstep.com"
@@ -101,21 +108,24 @@ def main():
 
     print(f"API endpoint: {api_endpoint}")
 
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    backend = credentials.set_secret("ACTIONSTEP_CLIENT_ID", client_id)
+    credentials.set_secret("ACTIONSTEP_CLIENT_SECRET", client_secret)
+    credentials.set_secret("ACTIONSTEP_API_ENDPOINT", api_endpoint)
 
-    env_file = CONFIG_DIR / ".env"
-    with open(env_file, "w") as f:
-        f.write(f"ACTIONSTEP_CLIENT_ID={client_id}\n")
-        f.write(f"ACTIONSTEP_CLIENT_SECRET={client_secret}\n")
-        f.write(f"ACTIONSTEP_API_ENDPOINT={api_endpoint}\n")
-    os.chmod(env_file, 0o600)
+    if backend == "keyring":
+        print(
+            f"\n✓ Credentials saved to the OS keyring ({credentials.storage_backend()})."
+        )
+    else:
+        print(f"\n✓ Credentials saved to {credentials.ENV_FILE} (0600).")
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     token_file = CONFIG_DIR / "tokens.json"
     with open(token_file, "w") as f:
         json.dump(tokens, f, indent=2)
     os.chmod(token_file, 0o600)
 
-    print(f"\n✓ Credentials saved to {env_file}")
     print(f"✓ Tokens saved to {token_file}")
     print("\nRun 'actionstep-mcp-verify' to test the connection.")
 

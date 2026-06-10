@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Actionstep API client. OAuth 2.0 auth code flow, dynamic api_endpoint, wrapped body format."""
 
+import ipaddress
 import json
 import os
 import sys
 import time
+import urllib.parse
 import requests
 from pathlib import Path
 from datetime import datetime, timezone
@@ -16,6 +18,61 @@ AUTH_URL = f"{AUTH_BASE}/oauth/authorize"
 
 CONFIG_DIR = Path.home() / ".actionstep-mcp"
 API_PREFIX = "/api/rest"
+
+# Private/reserved address ranges that must not receive webhook payloads (SSRF hygiene).
+_PRIVATE_NETS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _validate_webhook_url(url: str) -> None:
+    """Raise ValueError if url is not a safe https endpoint for webhook delivery.
+
+    Enforces:
+    - scheme must be https (prevents cleartext delivery)
+    - hostname must not resolve to a private, loopback, or link-local address
+      (prevents SSRF — Actionstep posting matter data to an internal service)
+
+    Note: this is a best-effort syntactic check on the literal hostname.  DNS
+    resolution at call time is not performed; a split-horizon DNS attack or a
+    hostname that resolves differently at Actionstep's side is out of scope.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(
+            f"Webhook target_url must use https (got '{parsed.scheme}'). "
+            "Plain-http endpoints would receive Actionstep matter data unencrypted."
+        )
+    hostname = parsed.hostname or ""
+    if not hostname:
+        raise ValueError("Webhook target_url must include a hostname.")
+    # Reject bare IP addresses in private ranges
+    try:
+        addr = ipaddress.ip_address(hostname)
+        for net in _PRIVATE_NETS:
+            if addr in net:
+                raise ValueError(
+                    f"Webhook target_url hostname '{hostname}' is a private/loopback/"
+                    "link-local address. Webhooks must target a firm-controlled public endpoint."
+                )
+    except ValueError as exc:
+        # Re-raise our own ValueError; non-IP hostnames (domain names) pass through
+        if "private" in str(exc) or "loopback" in str(exc) or "link-local" in str(exc):
+            raise
+    # Reject well-known loopback/internal hostnames
+    _BLOCKED_HOSTS = {"localhost", "local", "internal", "metadata.google.internal"}
+    if hostname.lower() in _BLOCKED_HOSTS or hostname.lower().endswith(".local"):
+        raise ValueError(
+            f"Webhook target_url hostname '{hostname}' is a reserved/internal hostname. "
+            "Webhooks must target a firm-controlled public endpoint."
+        )
 
 
 def _load_env():
@@ -1018,6 +1075,7 @@ class ActionstepClient:
         return self.get(f"resthooks/{hook_id}")
 
     def create_rest_hook(self, event_name, target_url):
+        _validate_webhook_url(target_url)
         return self.post(
             "resthooks", "resthooks", {"eventName": event_name, "targetUrl": target_url}
         )
@@ -1027,6 +1085,7 @@ class ActionstepClient:
         if event_name:
             data["eventName"] = event_name
         if target_url:
+            _validate_webhook_url(target_url)
             data["targetUrl"] = target_url
         return self.put(f"resthooks/{hook_id}", "resthooks", data)
 

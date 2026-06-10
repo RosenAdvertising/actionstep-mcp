@@ -1858,6 +1858,94 @@ def list_participant_relationship_types() -> str:
         return json.dumps({"error": str(e)}, indent=2)
 
 
+# ── Resources ─────────────────────────────────────────────────────────────────
+
+
+@mcp.resource("actionstep://action_types", mime_type="application/json")
+def action_types_resource() -> str:
+    """All action types (matter/case types) configured in this Actionstep organisation — read-only reference data."""
+    return json.dumps(ActionstepClient().list_action_types(), indent=2)
+
+
+@mcp.resource("actionstep://participant_types", mime_type="application/json")
+def participant_types_resource() -> str:
+    """All participant types (contact roles: client, opposing party, witness, etc.) — read-only reference data."""
+    return json.dumps(ActionstepClient().list_participant_types(), indent=2)
+
+
+@mcp.resource("actionstep://security-notes", mime_type="text/markdown")
+def security_notes_resource() -> str:
+    """Security posture documentation for this Actionstep MCP server."""
+    return """\
+# Actionstep MCP — Security Notes
+
+## Webhook SSRF Protection (SEC-E)
+
+The `create_rest_hook` tool validates the `target_url` parameter before
+registering any webhook subscription. The validation enforces:
+
+- **HTTPS-only**: plain HTTP target URLs are rejected.
+- **Blocked destinations**: private RFC-1918 ranges (10.x, 172.16-31.x,
+  192.168.x), loopback (127.x, ::1), link-local (169.254.x), and cloud
+  metadata endpoints (169.254.169.254) are all rejected.
+
+Any call to `create_rest_hook` with an invalid target URL will return an
+`{"error": "..."}` response and no webhook will be created. The same
+validation applies to `update_rest_hook` when a new `target_url` is supplied.
+
+**Agent guidance**: when registering webhooks, only use publicly routable
+HTTPS URLs as the target. Attempts to route to internal infrastructure will
+be blocked by the server.
+"""
+
+
+# ── Prompts ───────────────────────────────────────────────────────────────────
+
+
+@mcp.prompt()
+def daily_briefing() -> str:
+    """Morning briefing: overdue tasks, today's calendar, and unbilled time summary."""
+    return """You are a legal assistant. Run a morning briefing using the Actionstep tools:
+
+1. List all open actions (list_actions with status=open) — note any recently created
+2. List all pending tasks (list_tasks) — flag any overdue (due before today) with ⚠️
+3. List today's calendar appointments (list_calendar_appointments)
+4. List time entries logged in the last 7 days (list_time_entries) — identify unbilled work
+5. Summarize: what needs attention today, ranked by urgency
+
+Be specific — include action names, task names, due dates, and amounts. Keep it concise."""
+
+
+@mcp.prompt()
+def intake_triage(action_id: str) -> str:
+    """Triage a new or recently opened action: review participants, tasks, and billing setup."""
+    return f"""Triage action {action_id} to ensure it is properly set up:
+
+1. Get the action detail (get_action)
+2. List participants on the action (list_action_participants with action_id={action_id}) — check that a client role is assigned
+3. List tasks on the action (list_tasks with action_id={action_id}) — note any missing intake tasks
+4. Get billing settings (list_action_bill_settings with action_id={action_id}) — confirm billing type and rate are set
+5. List documents on the action (list_action_documents with action_id={action_id}) — note any required documents not yet uploaded
+
+Output a checklist: ✅ complete, ⚠️ needs attention, ❌ missing. One line per item."""
+
+
+@mcp.prompt()
+def matter_billing_summary(action_id: str) -> str:
+    """Billing summary for a matter: time entries, disbursements, and billing configuration."""
+    return f"""Generate a billing summary for action {action_id}:
+
+1. Get action detail (get_action)
+2. List all time entries (list_time_entries with action_id={action_id}) — sum total billable minutes
+3. List all disbursements (list_disbursements with action_id={action_id}) — sum total amount
+4. Get billing settings (list_action_bill_settings with action_id={action_id}) — show rate and billing type
+5. List file notes (list_file_notes with action_id={action_id}) — surface any billing-related notes
+
+Output: total billable time (hours and minutes), total disbursements, estimated value at current rate,
+and any notes flagging billing issues. Note: webhooks in this server validate target URLs against SSRF
+(HTTPS-only; private/loopback/metadata IPs are blocked)."""
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 

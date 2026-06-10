@@ -11,6 +11,8 @@ import requests
 from pathlib import Path
 from datetime import datetime, timezone
 
+from actionstep_mcp import credentials
+
 AUTH_BASE = "https://go.actionstep.com"
 REDIRECT_URI = "http://127.0.0.1:8769/callback"
 TOKEN_URL = f"{AUTH_BASE}/oauth/token"
@@ -18,6 +20,11 @@ AUTH_URL = f"{AUTH_BASE}/oauth/authorize"
 
 CONFIG_DIR = Path.home() / ".actionstep-mcp"
 API_PREFIX = "/api/rest"
+
+# Resolve credentials through the pluggable store (OS keyring -> .env file).
+credentials.load_into_environ(
+    ["ACTIONSTEP_CLIENT_ID", "ACTIONSTEP_CLIENT_SECRET", "ACTIONSTEP_API_ENDPOINT"]
+)
 
 # Private/reserved address ranges that must not receive webhook payloads (SSRF hygiene).
 _PRIVATE_NETS = [
@@ -74,19 +81,6 @@ def _validate_webhook_url(url: str) -> None:
             "Webhooks must target a firm-controlled public endpoint."
         )
 
-
-def _load_env():
-    env_file = CONFIG_DIR / ".env"
-    if env_file.exists():
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, val = line.split("=", 1)
-                    os.environ.setdefault(key.strip(), val.strip())
-
-
-_load_env()
 
 CLIENT_ID = os.environ.get("ACTIONSTEP_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("ACTIONSTEP_CLIENT_SECRET", "")

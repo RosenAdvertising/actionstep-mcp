@@ -1,11 +1,11 @@
-"""Cowork standard structured logging configuration.
+"""Structured logging configuration.
 
 Drop into any service-style project. Provides JSON logs to stderr with a
-consistent schema across the fleet.
+consistent schema.
 
 Usage:
     from logging_config import configure_logging
-    log = configure_logging("daily-agent")
+    log = configure_logging("my-service")
     log.info("startup", port=8080)
     log.error("api_call_failed", tool="list_matters", status=500, elapsed_ms=312)
 

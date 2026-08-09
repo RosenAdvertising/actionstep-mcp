@@ -81,15 +81,15 @@ jobs:
       - name: Install deps
         run: |
           if [ -f pyproject.toml ]; then
-            uv sync --all-extras || pip install -e .
+            uv sync --locked --all-groups
           elif [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
-          pip install pytest pytest-cov bandit pip-audit
+          pip install bandit pip-audit
       - name: Run pytest
         run: |
           if [ -d tests ] || [ -d test ]; then
-            pytest --cov --cov-report=xml || echo "No tests collected"
+            uv run pytest --cov --cov-report=xml
           else
             echo "No tests directory — skipping pytest"
           fi

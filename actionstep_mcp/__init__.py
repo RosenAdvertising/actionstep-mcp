@@ -1,1 +1,1 @@
-"""Actionstep MCP — FastMCP server for Actionstep practice management."""
+"""Actionstep MCP server for Actionstep practice management."""

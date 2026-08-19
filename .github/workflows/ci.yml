@@ -12,3 +12,4 @@ permissions:
 jobs:
   ci:
     uses: RosenAdvertising/oss-workflows/.github/workflows/ci.yml@v1
+# CI verification run 2026-08-19 — exercises RosenAdvertising/oss-workflows@v1 with Semgrep blocking. This PR is closed unmerged.

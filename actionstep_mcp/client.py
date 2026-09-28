@@ -3,15 +3,18 @@
 
 import ipaddress
 import json
+import logging
 import os
-import sys
 import time
 import urllib.parse
-import requests
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+
+import requests
 
 from actionstep_mcp import credentials
+
+logger = logging.getLogger(__name__)
 
 AUTH_BASE = "https://go.actionstep.com"
 REDIRECT_URI = "http://127.0.0.1:8769/callback"
@@ -39,6 +42,15 @@ _PRIVATE_NETS = [
 ]
 
 
+def _log_guard_rejection(reason: str) -> None:
+    """Log a fixed rejection reason without user, URL, or credential data."""
+    logger.warning(
+        "actionstep_guard_rejected reason=%s",
+        reason,
+        extra={"event": "actionstep_guard_rejected", "reason": reason},
+    )
+
+
 def _validate_webhook_url(url: str) -> None:
     """Raise ValueError if url is not a safe https endpoint for webhook delivery.
 
@@ -53,29 +65,32 @@ def _validate_webhook_url(url: str) -> None:
     """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https":
+        _log_guard_rejection("webhook_non_https_scheme")
         raise ValueError(
             f"Webhook target_url must use https (got '{parsed.scheme}'). "
             "Plain-http endpoints would receive Actionstep matter data unencrypted."
         )
     hostname = parsed.hostname or ""
     if not hostname:
+        _log_guard_rejection("webhook_missing_hostname")
         raise ValueError("Webhook target_url must include a hostname.")
     # Reject bare IP addresses in private ranges
     try:
         addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        addr = None
+    if addr is not None:
         for net in _PRIVATE_NETS:
             if addr in net:
+                _log_guard_rejection("webhook_private_address")
                 raise ValueError(
                     f"Webhook target_url hostname '{hostname}' is a private/loopback/"
                     "link-local address. Webhooks must target a firm-controlled public endpoint."
                 )
-    except ValueError as exc:
-        # Re-raise our own ValueError; non-IP hostnames (domain names) pass through
-        if "private" in str(exc) or "loopback" in str(exc) or "link-local" in str(exc):
-            raise
     # Reject well-known loopback/internal hostnames
     _BLOCKED_HOSTS = {"localhost", "local", "internal", "metadata.google.internal"}
     if hostname.lower() in _BLOCKED_HOSTS or hostname.lower().endswith(".local"):
+        _log_guard_rejection("webhook_reserved_hostname")
         raise ValueError(
             f"Webhook target_url hostname '{hostname}' is a reserved/internal hostname. "
             "Webhooks must target a firm-controlled public endpoint."
@@ -98,10 +113,18 @@ def _json_response(resp):
     try:
         return resp.json()
     except ValueError:
-        raise RuntimeError(
-            f"Actionstep API returned non-JSON response ({resp.status_code}): "
-            f"{resp.text[:200]}"
+        logger.warning(
+            "actionstep_response_rejected reason=non_json status=%s",
+            resp.status_code,
+            extra={
+                "event": "actionstep_response_rejected",
+                "reason": "non_json",
+                "status": resp.status_code,
+            },
         )
+        raise RuntimeError(
+            f"Actionstep API returned a non-JSON response ({resp.status_code})"
+        ) from None
 
 
 class TokenManager:
@@ -132,8 +155,10 @@ class TokenManager:
 
     def refresh(self):
         if not self.refresh_token:
+            _log_guard_rejection("refresh_token_missing")
             raise RuntimeError("No refresh token. Run: actionstep-mcp-setup")
         if not CLIENT_ID or not CLIENT_SECRET:
+            _log_guard_rejection("oauth_client_credentials_missing")
             raise RuntimeError(
                 "ACTIONSTEP_CLIENT_ID and ACTIONSTEP_CLIENT_SECRET are required. Run: actionstep-mcp-setup"
             )
@@ -156,7 +181,15 @@ class TokenManager:
                 new_tokens["api_endpoint"] = self.tokens["api_endpoint"]
             self.save(new_tokens)
             return new_tokens
-        raise RuntimeError(f"Token refresh failed ({resp.status_code}): {resp.text}")
+        logger.warning(
+            "actionstep_token_refresh_failed status=%s",
+            resp.status_code,
+            extra={
+                "event": "actionstep_token_refresh_failed",
+                "status": resp.status_code,
+            },
+        )
+        raise RuntimeError(f"Token refresh failed ({resp.status_code})")
 
 
 class ActionstepClient:
@@ -167,10 +200,12 @@ class ActionstepClient:
             API_ENDPOINT or self.tm.tokens.get("api_endpoint", "")
         ).rstrip("/")
         if not self.api_endpoint:
+            _log_guard_rejection("api_endpoint_missing")
             raise RuntimeError(
                 "ACTIONSTEP_API_ENDPOINT not set. Run: actionstep-mcp-setup"
             )
         if not self.tm.access_token and not self.tm.refresh_token:
+            _log_guard_rejection("oauth_tokens_missing")
             raise RuntimeError(
                 "No Actionstep OAuth tokens found. Run: actionstep-mcp-setup"
             )
@@ -201,7 +236,16 @@ class ActionstepClient:
 
         if resp.status_code == 429 and _rate_retries < 3:
             retry_after = _retry_after_seconds(resp)
-            print(f"Rate limited. Waiting {retry_after}s...", file=sys.stderr)
+            logger.warning(
+                "actionstep_rate_limited retry_after_seconds=%s retry=%s",
+                retry_after,
+                _rate_retries + 1,
+                extra={
+                    "event": "actionstep_rate_limited",
+                    "retry_after_seconds": retry_after,
+                    "retry": _rate_retries + 1,
+                },
+            )
             time.sleep(retry_after)
             return self._request(
                 method,
@@ -216,9 +260,15 @@ class ActionstepClient:
             return {"success": True}
 
         if not resp.ok:
-            raise RuntimeError(
-                f"Actionstep API error {resp.status_code}: {resp.text[:400]}"
+            logger.warning(
+                "actionstep_api_request_failed status=%s",
+                resp.status_code,
+                extra={
+                    "event": "actionstep_api_request_failed",
+                    "status": resp.status_code,
+                },
             )
+            raise RuntimeError(f"Actionstep API error {resp.status_code}")
 
         return _json_response(resp)
 

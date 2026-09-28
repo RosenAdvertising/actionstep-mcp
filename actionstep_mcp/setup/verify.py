@@ -1,27 +1,49 @@
 #!/usr/bin/env python3
 """Post-setup smoke test — verifies auth and basic Actionstep API access."""
 
+import logging
 import sys
 from pathlib import Path
 
+from actionstep_mcp import credentials
+
 CONFIG_DIR = Path.home() / ".actionstep-mcp"
+logger = logging.getLogger(__name__)
 
 
 def check_config():
-    env_file = CONFIG_DIR / ".env"
     token_file = CONFIG_DIR / "tokens.json"
 
-    if not env_file.exists():
-        print(f"✗ Missing credentials: {env_file}")
+    credential_keys = (
+        "ACTIONSTEP_CLIENT_ID",
+        "ACTIONSTEP_CLIENT_SECRET",
+        "ACTIONSTEP_API_ENDPOINT",
+    )
+    if not all(credentials.get_secret(key) for key in credential_keys):
+        logger.warning(
+            "actionstep_verification_guard_rejected reason=credentials_missing",
+            extra={
+                "event": "actionstep_verification_guard_rejected",
+                "reason": "credentials_missing",
+            },
+        )
+        print("✗ Missing Actionstep credentials")
         print("  Run: actionstep-mcp-setup")
         return False
 
     if not token_file.exists():
-        print(f"✗ Missing tokens: {token_file}")
+        logger.warning(
+            "actionstep_verification_guard_rejected reason=tokens_missing",
+            extra={
+                "event": "actionstep_verification_guard_rejected",
+                "reason": "tokens_missing",
+            },
+        )
+        print("✗ Missing Actionstep tokens")
         print("  Run: actionstep-mcp-setup")
         return False
 
-    print(f"✓ Config found: {CONFIG_DIR}")
+    print("✓ Credential and token stores found")
     return True
 
 
@@ -32,17 +54,8 @@ def check_api():
 
         client = ActionstepClient()
 
-        user = client.get_current_user()
-        users = user.get("users", user)
-        if isinstance(users, list) and users:
-            users = users[0]
-        if isinstance(users, dict):
-            name = (
-                str(users.get("firstName", "")) + " " + str(users.get("lastName", ""))
-            ).strip() or "unknown"
-        else:
-            name = "unknown"
-        print(f"✓ Authenticated as: {name}")
+        client.get_current_user()
+        print("✓ Authentication succeeded")
 
         actions = client.list_actions(limit=5)
         items = actions.get("actions", []) if isinstance(actions, dict) else actions
@@ -50,8 +63,16 @@ def check_api():
         print(f"✓ Actions accessible: {count} returned (limit 5)")
 
         return True
-    except Exception as e:
-        print(f"✗ API check failed: {e}")
+    except Exception as exc:
+        logger.warning(
+            "actionstep_verification_failed error_type=%s",
+            type(exc).__name__,
+            extra={
+                "event": "actionstep_verification_failed",
+                "error_type": type(exc).__name__,
+            },
+        )
+        print("✗ API check failed. See the PII-free application log for a reason.")
         return False
 
 

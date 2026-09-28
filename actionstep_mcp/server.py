@@ -2,8 +2,15 @@
 """Actionstep MCP Server — full Actionstep API coverage via FastMCP."""
 
 import json
+from typing import Annotated
+
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
 from .client import ActionstepClient
+
+ListLimit = Annotated[int, Field(ge=1, le=200)]
+PageNumber = Annotated[int, Field(ge=1)]
 
 mcp = FastMCP(
     "actionstep-mcp",
@@ -50,7 +57,10 @@ def get_user(user_id: str) -> str:
 
 @mcp.tool()
 def list_actions(
-    action_type: str = "", status: str = "", limit: int = 50, page: int = 1
+    action_type: str = "",
+    status: str = "",
+    limit: ListLimit = 50,
+    page: PageNumber = 1,
 ) -> str:
     """List actions (matters/cases). action_type: filter by action type ID. status: open|closed."""
     try:
@@ -493,7 +503,7 @@ def delete_action_type_folder(folder_id: str) -> str:
 
 
 @mcp.tool()
-def list_participants(page: int = 1, limit: int = 50) -> str:
+def list_participants(page: PageNumber = 1, limit: ListLimit = 50) -> str:
     """List participants (contacts/clients)."""
     try:
         return json.dumps(
@@ -766,7 +776,9 @@ def delete_contact_note(note_id: str) -> str:
 
 
 @mcp.tool()
-def list_phone_records(participant_id: str = "", limit: int = 50, page: int = 1) -> str:
+def list_phone_records(
+    participant_id: str = "", limit: ListLimit = 50, page: PageNumber = 1
+) -> str:
     """List phone numbers for participants."""
     try:
         return json.dumps(
@@ -834,7 +846,10 @@ def delete_phone_record(record_id: str) -> str:
 
 @mcp.tool()
 def list_tasks(
-    action_id: str = "", assignee_id: str = "", page: int = 1, limit: int = 50
+    action_id: str = "",
+    assignee_id: str = "",
+    page: PageNumber = 1,
+    limit: ListLimit = 50,
 ) -> str:
     """List tasks. Filter by action_id (matter) or assignee_id (user)."""
     try:
@@ -924,7 +939,9 @@ def delete_task(task_id: str) -> str:
 
 
 @mcp.tool()
-def list_file_notes(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_file_notes(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List file notes (case notes/attendance notes) on actions."""
     try:
         return json.dumps(
@@ -984,7 +1001,7 @@ def delete_file_note(note_id: str) -> str:
 
 
 @mcp.tool()
-def list_scratch_notes(page: int = 1, limit: int = 50) -> str:
+def list_scratch_notes(page: PageNumber = 1, limit: ListLimit = 50) -> str:
     """List scratch notes (quick personal notes)."""
     try:
         return json.dumps(
@@ -1036,7 +1053,9 @@ def delete_scratch_note(note_id: str) -> str:
 
 
 @mcp.tool()
-def list_time_records(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_time_records(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List time records (timer sessions). Filter by action_id for a specific matter."""
     try:
         return json.dumps(
@@ -1106,7 +1125,9 @@ def delete_time_record(record_id: str) -> str:
 
 
 @mcp.tool()
-def list_time_entries(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_time_entries(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List time entries (billable time). Filter by action_id for a specific matter."""
     try:
         return json.dumps(
@@ -1209,7 +1230,9 @@ def get_time_record_activity(activity_id: str) -> str:
 
 
 @mcp.tool()
-def list_disbursements(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_disbursements(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List disbursements (expenses). Filter by action_id for matter-specific expenses."""
     try:
         return json.dumps(
@@ -1286,7 +1309,7 @@ def delete_disbursement(disbursement_id: str) -> str:
 
 @mcp.tool()
 def list_calendar_appointments(
-    action_id: str = "", page: int = 1, limit: int = 50
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
 ) -> str:
     """List calendar appointments. Filter by action_id for matter-specific events."""
     try:
@@ -1365,7 +1388,9 @@ def delete_calendar_appointment(appt_id: str) -> str:
 
 
 @mcp.tool()
-def list_emails(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_emails(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List emails. Filter by action_id to see emails on a matter."""
     try:
         return json.dumps(
@@ -1451,7 +1476,7 @@ def delete_email_association(assoc_id: str) -> str:
 
 
 @mcp.tool()
-def list_sms(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_sms(action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50) -> str:
     """List SMS messages. Filter by action_id for matter-specific messages."""
     try:
         return json.dumps(

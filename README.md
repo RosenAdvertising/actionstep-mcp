@@ -24,6 +24,7 @@ MCP server for [Actionstep](https://actionstep.com) — 144 tools covering the f
 ## Requirements
 
 - Python 3.10+
+- Python MCP SDK >=2.2,<3 (the protocol target is 2026-07-28)
 - Claude Desktop (or any MCP-compatible client)
 - Actionstep developer credentials (Client ID, Client Secret)
 

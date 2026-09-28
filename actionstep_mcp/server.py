@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Actionstep MCP Server — full Actionstep API coverage via FastMCP."""
+"""Actionstep MCP Server — full Actionstep API coverage via MCPServer."""
 
 import json
 from typing import Annotated
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from pydantic import Field
 
 from .client import ActionstepClient
@@ -12,7 +12,7 @@ from .client import ActionstepClient
 ListLimit = Annotated[int, Field(ge=1, le=200)]
 PageNumber = Annotated[int, Field(ge=1)]
 
-mcp = FastMCP(
+mcp = MCPServer(
     "actionstep-mcp",
     instructions=(
         "Full access to Actionstep practice management: actions (matters), participants "

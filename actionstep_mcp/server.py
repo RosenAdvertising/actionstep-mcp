@@ -14,6 +14,7 @@ PageNumber = Annotated[int, Field(ge=1)]
 
 mcp = MCPServer(
     "actionstep-mcp",
+    version="0.1.0",
     instructions=(
         "Full access to Actionstep practice management: actions (matters), participants "
         "(contacts), tasks, time records, time entries, disbursements, calendar, emails, "

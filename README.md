@@ -73,8 +73,7 @@ via the cross-platform [`keyring`](https://github.com/jaraco/keyring) library:
 | Windows | Credential Manager                       |
 | Linux   | Secret Service (GNOME Keyring / KWallet) |
 
-Secrets are saved under the service name `actionstep-mcp`. Nothing is written to
-disk in clear text.
+Secrets saved to keyring use the service name `actionstep-mcp`.
 
 **File fallback.** On a host with no keyring backend (e.g. a headless Linux box
 without Secret Service), or if you set `ACTIONSTEP_MCP_USE_KEYRING=0`, credentials

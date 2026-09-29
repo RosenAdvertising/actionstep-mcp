@@ -170,6 +170,7 @@ class TokenManager:
                 "grant_type": "refresh_token",
                 "refresh_token": self.refresh_token,
             },
+            timeout=30,
         )
         if resp.status_code == 200:
             new_tokens = _json_response(resp)

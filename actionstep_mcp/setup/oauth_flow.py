@@ -159,6 +159,7 @@ def main():
             "code": _auth_code,
             "redirect_uri": REDIRECT_URI,
         },
+        timeout=30,
     )
 
     if resp.status_code != 200:

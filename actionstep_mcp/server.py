@@ -3,7 +3,7 @@
 
 import json
 from contextvars import ContextVar
-from typing import Annotated
+from typing import Annotated, cast
 
 from mcp.server import MCPServer
 from pydantic import Field, ValidationError
@@ -2026,7 +2026,8 @@ async def _safe_call_tool(name, arguments, context=None):
         if type(exc) is ToolError and isinstance(exc.__cause__, ValidationError):
             tool = mcp._tool_manager.get_tool(name)
             properties = tool.parameters.get("properties", {}) if tool else {}
-            for error in exc.__cause__.errors(include_input=False, include_url=False):
+            cause = cast(ValidationError, exc.__cause__)
+            for error in cause.errors(include_input=False, include_url=False):
                 location = error.get("loc", ())
                 field = location[0] if location else None
                 if field in properties:

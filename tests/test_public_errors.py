@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import stat
+from typing import Any, cast
 
 import pytest
 import requests
@@ -61,7 +62,7 @@ def test_tool_failures_have_safe_exact_text_and_is_error(monkeypatch, error, exp
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
 @pytest.mark.parametrize("failure", [requests.Timeout, requests.ConnectionError])
 def test_write_transport_errors_warn_unknown_outcome(method, failure):
-    client = ActionstepClient.__new__(ActionstepClient)
+    client = cast(Any, ActionstepClient.__new__(ActionstepClient))
 
     class BrokenSession:
         def request(self, *args, **kwargs):
@@ -102,7 +103,7 @@ def test_write_timeout_has_unknown_outcome_and_is_error(monkeypatch):
 
 
 def test_request_timeout_and_path_segment_escaping():
-    client = ActionstepClient.__new__(ActionstepClient)
+    client = cast(Any, ActionstepClient.__new__(ActionstepClient))
     client.api_endpoint = "https://offline.invalid"
 
     class Response:
@@ -132,7 +133,7 @@ def test_request_timeout_and_path_segment_escaping():
 
 
 def test_retry_after_uses_total_budget_without_shortening_vendor_delay(monkeypatch):
-    client = ActionstepClient.__new__(ActionstepClient)
+    client = cast(Any, ActionstepClient.__new__(ActionstepClient))
     client.api_endpoint = "https://offline.invalid"
 
     class Response:
@@ -151,7 +152,7 @@ def test_retry_after_uses_total_budget_without_shortening_vendor_delay(monkeypat
 
 
 def test_retry_after_aggregate_budget_across_requests(monkeypatch):
-    client = ActionstepClient.__new__(ActionstepClient)
+    client = cast(Any, ActionstepClient.__new__(ActionstepClient))
     client.api_endpoint = "https://offline.invalid"
     now = [0]
     sleeps = []

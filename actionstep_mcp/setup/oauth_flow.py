@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import requests
 
 from actionstep_mcp import credentials
+from actionstep_mcp.errors import safe_error
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         pass
 
 
-def main():
+def _main():
     global _auth_code, _expected_state
     _auth_code = None
     _expected_state = secrets.token_urlsafe(32)
@@ -135,6 +136,7 @@ def main():
     webbrowser.open(auth_url_full)
 
     server = HTTPServer(("127.0.0.1", 8769), _CallbackHandler)
+    server.timeout = 30
     print("Waiting for Actionstep to redirect back (port 8769)...")
     server.handle_request()
 
@@ -171,7 +173,12 @@ def main():
                 "status": resp.status_code,
             },
         )
-        print(f"Token exchange failed ({resp.status_code}).")
+        if resp.status_code == 403:
+            print(safe_error(RuntimeError("Actionstep API error 403")))
+        else:
+            print(
+                f"Token exchange failed ({resp.status_code}). Check the client credentials and authorization code."
+            )
         sys.exit(1)
 
     tokens = resp.json()
@@ -207,12 +214,34 @@ def main():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     token_file = CONFIG_DIR / "tokens.json"
-    with open(token_file, "w") as f:
+    fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(f.fileno(), 0o600)
         json.dump(tokens, f, indent=2)
     os.chmod(token_file, 0o600)
 
     print("✓ Tokens saved to the protected local token store (0600).")
     print("\nRun 'actionstep-mcp-verify' to test the connection.")
+
+
+def main():
+    try:
+        _main()
+    except EOFError:
+        print("Error: Setup input ended before configuration was complete.")
+        sys.exit(1)
+    except (requests.Timeout, requests.ConnectionError):
+        print(
+            "Error: Authorization outcome is unknown. Check whether it completed before retrying actionstep-mcp-setup."
+        )
+        sys.exit(1)
+    except Exception:
+        logger.warning("actionstep_setup_failed reason=unexpected_failure")
+        print(
+            "Error: Setup failed. Check the inputs and network, then run actionstep-mcp-setup again."
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

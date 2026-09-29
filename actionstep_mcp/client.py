@@ -3,6 +3,8 @@
 
 import ipaddress
 import json
+import math
+from email.utils import parsedate_to_datetime
 import logging
 import os
 import time
@@ -13,6 +15,7 @@ from pathlib import Path
 import requests
 
 from actionstep_mcp import credentials
+from actionstep_mcp.errors import SafeToolError
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +107,18 @@ API_ENDPOINT = os.environ.get("ACTIONSTEP_API_ENDPOINT", "")
 
 def _retry_after_seconds(resp, default=10):
     try:
-        return int(resp.headers.get("Retry-After", default))
-    except (TypeError, ValueError):
-        return default
+        value = float(resp.headers.get("Retry-After", default))
+        return max(0, math.ceil(value)) if math.isfinite(value) else default
+    except (TypeError, ValueError, OverflowError):
+        try:
+            date = parsedate_to_datetime(resp.headers.get("Retry-After", ""))
+            if date.tzinfo is None:
+                date = date.replace(tzinfo=timezone.utc)
+            return max(
+                0, math.ceil((date - datetime.now(timezone.utc)).total_seconds())
+            )
+        except (TypeError, ValueError, OverflowError):
+            return default
 
 
 def _json_response(resp):
@@ -139,11 +151,14 @@ class TokenManager:
         return {}
 
     def save(self, tokens):
-        self.tokens = tokens
-        self.token_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.token_file, "w") as f:
+        self.token_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(self.token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
             json.dump(tokens, f, indent=2)
         os.chmod(self.token_file, 0o600)
+        self.tokens = tokens
 
     @property
     def access_token(self):
@@ -223,16 +238,42 @@ class ActionstepClient:
         return f"{self.api_endpoint}{API_PREFIX}/{path.lstrip('/')}"
 
     def _request(
-        self, method, path, params=None, json_body=None, retry=True, _rate_retries=0
+        self,
+        method,
+        path,
+        params=None,
+        json_body=None,
+        retry=True,
+        _rate_retries=0,
+        _retry_deadline=None,
     ):
+        if _retry_deadline is None:
+            _retry_deadline = time.monotonic() + 60
         url = self._url(path)
-        resp = self.session.request(method, url, params=params, json=json_body)
+        try:
+            resp = self.session.request(
+                method, url, params=params, json=json_body, timeout=30
+            )
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+                raise SafeToolError(
+                    "Actionstep connection timed out or failed; the write outcome is unknown. "
+                    "Check whether it completed before retrying."
+                ) from None
+            raise SafeToolError(
+                "Actionstep connection timed out or failed. Check connectivity and retry."
+            ) from None
 
         if resp.status_code == 401 and retry:
             self.tm.refresh()
             self.session.headers["Authorization"] = f"Bearer {self.tm.access_token}"
             return self._request(
-                method, path, params=params, json_body=json_body, retry=False
+                method,
+                path,
+                params=params,
+                json_body=json_body,
+                retry=False,
+                _retry_deadline=_retry_deadline,
             )
 
         if resp.status_code == 429 and _rate_retries < 3:
@@ -247,7 +288,13 @@ class ActionstepClient:
                     "retry": _rate_retries + 1,
                 },
             )
-            time.sleep(retry_after)
+            remaining = max(0, _retry_deadline - time.monotonic())
+            if retry_after > remaining:
+                raise SafeToolError(
+                    f"Actionstep rate limit reached. Retry in {retry_after} seconds."
+                ) from None
+            if retry_after > 0:
+                time.sleep(retry_after)
             return self._request(
                 method,
                 path,
@@ -255,6 +302,12 @@ class ActionstepClient:
                 json_body=json_body,
                 retry=retry,
                 _rate_retries=_rate_retries + 1,
+                _retry_deadline=_retry_deadline,
+            )
+
+        if resp.status_code == 429:
+            raise SafeToolError(
+                f"Actionstep rate limit reached. Retry in {_retry_after_seconds(resp)} seconds."
             )
 
         if resp.status_code in (204, 200) and not resp.content:
@@ -294,7 +347,7 @@ class ActionstepClient:
         return self.get("users")
 
     def get_user(self, user_id):
-        return self.get(f"users/{user_id}")
+        return self.get(f"users/{urllib.parse.quote(str(user_id), safe='')}")
 
     # ── Actions (Matters) ─────────────────────────────────────────────────────
 
@@ -307,7 +360,7 @@ class ActionstepClient:
         return self.get("actions", params)
 
     def get_action(self, action_id):
-        return self.get(f"actions/{action_id}")
+        return self.get(f"actions/{urllib.parse.quote(str(action_id), safe='')}")
 
     def create_action(self, name, action_type_id, **fields):
         # Actionstep uses /actioncreate/{action_type_id} for creation,
@@ -316,10 +369,16 @@ class ActionstepClient:
         if "links" in fields:
             data["links"].update(fields.pop("links"))
         data.update(fields)
-        return self.post(f"actioncreate/{action_type_id}", "actioncreate", data)
+        return self.post(
+            f"actioncreate/{urllib.parse.quote(str(action_type_id), safe='')}",
+            "actioncreate",
+            data,
+        )
 
     def update_action(self, action_id, **fields):
-        return self.put(f"actions/{action_id}", "actions", fields)
+        return self.put(
+            f"actions/{urllib.parse.quote(str(action_id), safe='')}", "actions", fields
+        )
 
     # ── Action Types ──────────────────────────────────────────────────────────
 
@@ -330,7 +389,9 @@ class ActionstepClient:
         return self.get("actiontypes", params)
 
     def get_action_type(self, action_type_id):
-        return self.get(f"actiontypes/{action_type_id}")
+        return self.get(
+            f"actiontypes/{urllib.parse.quote(str(action_type_id), safe='')}"
+        )
 
     # ── Action Bill Settings ──────────────────────────────────────────────────
 
@@ -341,11 +402,15 @@ class ActionstepClient:
         return self.get("actionbillsettings", params)
 
     def get_action_bill_settings(self, settings_id):
-        return self.get(f"actionbillsettings/{settings_id}")
+        return self.get(
+            f"actionbillsettings/{urllib.parse.quote(str(settings_id), safe='')}"
+        )
 
     def update_action_bill_settings(self, settings_id, **fields):
         return self.put(
-            f"actionbillsettings/{settings_id}", "actionbillsettings", fields
+            f"actionbillsettings/{urllib.parse.quote(str(settings_id), safe='')}",
+            "actionbillsettings",
+            fields,
         )
 
     # ── Action Change Steps ───────────────────────────────────────────────────
@@ -372,7 +437,9 @@ class ActionstepClient:
         return self.get("actiondocuments", params)
 
     def get_action_document(self, document_id):
-        return self.get(f"actiondocuments/{document_id}")
+        return self.get(
+            f"actiondocuments/{urllib.parse.quote(str(document_id), safe='')}"
+        )
 
     def create_action_document(self, action_id, **fields):
         # Note: API uses "name" for the document name (not "fileName")
@@ -386,10 +453,16 @@ class ActionstepClient:
         return self.post("actiondocuments", "actiondocuments", data)
 
     def update_action_document(self, document_id, **fields):
-        return self.put(f"actiondocuments/{document_id}", "actiondocuments", fields)
+        return self.put(
+            f"actiondocuments/{urllib.parse.quote(str(document_id), safe='')}",
+            "actiondocuments",
+            fields,
+        )
 
     def delete_action_document(self, document_id):
-        return self.delete(f"actiondocuments/{document_id}")
+        return self.delete(
+            f"actiondocuments/{urllib.parse.quote(str(document_id), safe='')}"
+        )
 
     # ── Action Folders ────────────────────────────────────────────────────────
 
@@ -400,7 +473,7 @@ class ActionstepClient:
         return self.get("actionfolders", params)
 
     def get_action_folder(self, folder_id):
-        return self.get(f"actionfolders/{folder_id}")
+        return self.get(f"actionfolders/{urllib.parse.quote(str(folder_id), safe='')}")
 
     def create_action_folder(self, action_id, name):
         return self.post(
@@ -410,10 +483,16 @@ class ActionstepClient:
         )
 
     def update_action_folder(self, folder_id, **fields):
-        return self.put(f"actionfolders/{folder_id}", "actionfolders", fields)
+        return self.put(
+            f"actionfolders/{urllib.parse.quote(str(folder_id), safe='')}",
+            "actionfolders",
+            fields,
+        )
 
     def delete_action_folder(self, folder_id):
-        return self.delete(f"actionfolders/{folder_id}")
+        return self.delete(
+            f"actionfolders/{urllib.parse.quote(str(folder_id), safe='')}"
+        )
 
     # ── Action Participants ───────────────────────────────────────────────────
 
@@ -424,7 +503,7 @@ class ActionstepClient:
         return self.get("actionparticipants", params)
 
     def get_action_participant(self, ap_id):
-        return self.get(f"actionparticipants/{ap_id}")
+        return self.get(f"actionparticipants/{urllib.parse.quote(str(ap_id), safe='')}")
 
     def create_action_participant(self, action_id, participant_id, participant_type_id):
         data = {
@@ -437,10 +516,16 @@ class ActionstepClient:
         return self.post("actionparticipants", "actionparticipants", data)
 
     def update_action_participant(self, ap_id, **fields):
-        return self.put(f"actionparticipants/{ap_id}", "actionparticipants", fields)
+        return self.put(
+            f"actionparticipants/{urllib.parse.quote(str(ap_id), safe='')}",
+            "actionparticipants",
+            fields,
+        )
 
     def delete_action_participant(self, ap_id):
-        return self.delete(f"actionparticipants/{ap_id}")
+        return self.delete(
+            f"actionparticipants/{urllib.parse.quote(str(ap_id), safe='')}"
+        )
 
     # ── Action Permissions ────────────────────────────────────────────────────
 
@@ -451,7 +536,11 @@ class ActionstepClient:
         return self.get("actionpermissions", params)
 
     def update_action_permissions(self, perm_id, **fields):
-        return self.put(f"actionpermissions/{perm_id}", "actionpermissions", fields)
+        return self.put(
+            f"actionpermissions/{urllib.parse.quote(str(perm_id), safe='')}",
+            "actionpermissions",
+            fields,
+        )
 
     # ── Action Rates ──────────────────────────────────────────────────────────
 
@@ -462,7 +551,7 @@ class ActionstepClient:
         return self.get("actionrates", params)
 
     def get_action_rate(self, rate_id):
-        return self.get(f"actionrates/{rate_id}")
+        return self.get(f"actionrates/{urllib.parse.quote(str(rate_id), safe='')}")
 
     def create_action_rate(self, action_id, **fields):
         data = {"links": {"action": str(action_id)}}
@@ -472,10 +561,14 @@ class ActionstepClient:
         return self.post("actionrates", "actionrates", data)
 
     def update_action_rate(self, rate_id, **fields):
-        return self.put(f"actionrates/{rate_id}", "actionrates", fields)
+        return self.put(
+            f"actionrates/{urllib.parse.quote(str(rate_id), safe='')}",
+            "actionrates",
+            fields,
+        )
 
     def delete_action_rate(self, rate_id):
-        return self.delete(f"actionrates/{rate_id}")
+        return self.delete(f"actionrates/{urllib.parse.quote(str(rate_id), safe='')}")
 
     # ── Action Type Folders ───────────────────────────────────────────────────
 
@@ -486,7 +579,9 @@ class ActionstepClient:
         return self.get("actiontypefolders", params)
 
     def get_action_type_folder(self, folder_id):
-        return self.get(f"actiontypefolders/{folder_id}")
+        return self.get(
+            f"actiontypefolders/{urllib.parse.quote(str(folder_id), safe='')}"
+        )
 
     def create_action_type_folder(self, action_type_id, name):
         return self.post(
@@ -496,10 +591,16 @@ class ActionstepClient:
         )
 
     def update_action_type_folder(self, folder_id, **fields):
-        return self.put(f"actiontypefolders/{folder_id}", "actiontypefolders", fields)
+        return self.put(
+            f"actiontypefolders/{urllib.parse.quote(str(folder_id), safe='')}",
+            "actiontypefolders",
+            fields,
+        )
 
     def delete_action_type_folder(self, folder_id):
-        return self.delete(f"actiontypefolders/{folder_id}")
+        return self.delete(
+            f"actiontypefolders/{urllib.parse.quote(str(folder_id), safe='')}"
+        )
 
     # ── Participants (Contacts) ───────────────────────────────────────────────
 
@@ -507,7 +608,9 @@ class ActionstepClient:
         return self.get("participants", {"page": page, "pageSize": limit})
 
     def get_participant(self, participant_id):
-        return self.get(f"participants/{participant_id}")
+        return self.get(
+            f"participants/{urllib.parse.quote(str(participant_id), safe='')}"
+        )
 
     def create_participant(
         self, first_name="", last_name="", company_name="", is_company=False, **fields
@@ -522,10 +625,16 @@ class ActionstepClient:
         return self.post("participants", "participants", data)
 
     def update_participant(self, participant_id, **fields):
-        return self.put(f"participants/{participant_id}", "participants", fields)
+        return self.put(
+            f"participants/{urllib.parse.quote(str(participant_id), safe='')}",
+            "participants",
+            fields,
+        )
 
     def delete_participant(self, participant_id):
-        return self.delete(f"participants/{participant_id}")
+        return self.delete(
+            f"participants/{urllib.parse.quote(str(participant_id), safe='')}"
+        )
 
     # ── Participant Types ─────────────────────────────────────────────────────
 
@@ -533,7 +642,7 @@ class ActionstepClient:
         return self.get("participanttypes")
 
     def get_participant_type(self, pt_id):
-        return self.get(f"participanttypes/{pt_id}")
+        return self.get(f"participanttypes/{urllib.parse.quote(str(pt_id), safe='')}")
 
     def create_participant_type(self, name, **fields):
         return self.post(
@@ -541,7 +650,11 @@ class ActionstepClient:
         )
 
     def update_participant_type(self, pt_id, **fields):
-        return self.put(f"participanttypes/{pt_id}", "participanttypes", fields)
+        return self.put(
+            f"participanttypes/{urllib.parse.quote(str(pt_id), safe='')}",
+            "participanttypes",
+            fields,
+        )
 
     # ── Participant Relationship Types ────────────────────────────────────────
 
@@ -549,7 +662,9 @@ class ActionstepClient:
         return self.get("participantrelationshiptypes")
 
     def get_participant_relationship_type(self, rt_id):
-        return self.get(f"participantrelationshiptypes/{rt_id}")
+        return self.get(
+            f"participantrelationshiptypes/{urllib.parse.quote(str(rt_id), safe='')}"
+        )
 
     def create_participant_relationship_type(self, name, **fields):
         return self.post(
@@ -560,7 +675,7 @@ class ActionstepClient:
 
     def update_participant_relationship_type(self, rt_id, **fields):
         return self.put(
-            f"participantrelationshiptypes/{rt_id}",
+            f"participantrelationshiptypes/{urllib.parse.quote(str(rt_id), safe='')}",
             "participantrelationshiptypes",
             fields,
         )
@@ -574,7 +689,9 @@ class ActionstepClient:
         return self.get("contactrelationships", params)
 
     def get_contact_relationship(self, cr_id):
-        return self.get(f"contactrelationships/{cr_id}")
+        return self.get(
+            f"contactrelationships/{urllib.parse.quote(str(cr_id), safe='')}"
+        )
 
     def create_contact_relationship(
         self, participant1_id, participant2_id, relationship_type_id
@@ -589,7 +706,11 @@ class ActionstepClient:
         return self.post("contactrelationships", "contactrelationships", data)
 
     def update_contact_relationship(self, cr_id, **fields):
-        return self.put(f"contactrelationships/{cr_id}", "contactrelationships", fields)
+        return self.put(
+            f"contactrelationships/{urllib.parse.quote(str(cr_id), safe='')}",
+            "contactrelationships",
+            fields,
+        )
 
     # ── Contact Documents ─────────────────────────────────────────────────────
 
@@ -600,17 +721,23 @@ class ActionstepClient:
         return self.get("contactdocuments", params)
 
     def get_contact_document(self, doc_id):
-        return self.get(f"contactdocuments/{doc_id}")
+        return self.get(f"contactdocuments/{urllib.parse.quote(str(doc_id), safe='')}")
 
     def create_contact_document(self, participant_id, **fields):
         data = {"links": {"participant": str(participant_id)}, **fields}
         return self.post("contactdocuments", "contactdocuments", data)
 
     def update_contact_document(self, doc_id, **fields):
-        return self.put(f"contactdocuments/{doc_id}", "contactdocuments", fields)
+        return self.put(
+            f"contactdocuments/{urllib.parse.quote(str(doc_id), safe='')}",
+            "contactdocuments",
+            fields,
+        )
 
     def delete_contact_document(self, doc_id):
-        return self.delete(f"contactdocuments/{doc_id}")
+        return self.delete(
+            f"contactdocuments/{urllib.parse.quote(str(doc_id), safe='')}"
+        )
 
     # ── Contact Folders ───────────────────────────────────────────────────────
 
@@ -621,7 +748,7 @@ class ActionstepClient:
         return self.get("contactfolders", params)
 
     def get_contact_folder(self, folder_id):
-        return self.get(f"contactfolders/{folder_id}")
+        return self.get(f"contactfolders/{urllib.parse.quote(str(folder_id), safe='')}")
 
     def create_contact_folder(self, participant_id, name):
         return self.post(
@@ -631,10 +758,16 @@ class ActionstepClient:
         )
 
     def update_contact_folder(self, folder_id, **fields):
-        return self.put(f"contactfolders/{folder_id}", "contactfolders", fields)
+        return self.put(
+            f"contactfolders/{urllib.parse.quote(str(folder_id), safe='')}",
+            "contactfolders",
+            fields,
+        )
 
     def delete_contact_folder(self, folder_id):
-        return self.delete(f"contactfolders/{folder_id}")
+        return self.delete(
+            f"contactfolders/{urllib.parse.quote(str(folder_id), safe='')}"
+        )
 
     # ── Contact Notes ─────────────────────────────────────────────────────────
 
@@ -645,7 +778,7 @@ class ActionstepClient:
         return self.get("contactnotes", params)
 
     def get_contact_note(self, note_id):
-        return self.get(f"contactnotes/{note_id}")
+        return self.get(f"contactnotes/{urllib.parse.quote(str(note_id), safe='')}")
 
     def create_contact_note(self, participant_id, note, **fields):
         # API field is "text", not "note"
@@ -655,10 +788,14 @@ class ActionstepClient:
     def update_contact_note(self, note_id, **fields):
         if "note" in fields:
             fields["text"] = fields.pop("note")
-        return self.put(f"contactnotes/{note_id}", "contactnotes", fields)
+        return self.put(
+            f"contactnotes/{urllib.parse.quote(str(note_id), safe='')}",
+            "contactnotes",
+            fields,
+        )
 
     def delete_contact_note(self, note_id):
-        return self.delete(f"contactnotes/{note_id}")
+        return self.delete(f"contactnotes/{urllib.parse.quote(str(note_id), safe='')}")
 
     # ── Tasks ─────────────────────────────────────────────────────────────────
 
@@ -671,7 +808,7 @@ class ActionstepClient:
         return self.get("tasks", params)
 
     def get_task(self, task_id):
-        return self.get(f"tasks/{task_id}")
+        return self.get(f"tasks/{urllib.parse.quote(str(task_id), safe='')}")
 
     def create_task(
         self, name, action_id=None, assignee_id=None, due_date=None, **fields
@@ -689,10 +826,12 @@ class ActionstepClient:
         return self.post("tasks", "tasks", data)
 
     def update_task(self, task_id, **fields):
-        return self.put(f"tasks/{task_id}", "tasks", fields)
+        return self.put(
+            f"tasks/{urllib.parse.quote(str(task_id), safe='')}", "tasks", fields
+        )
 
     def delete_task(self, task_id):
-        return self.delete(f"tasks/{task_id}")
+        return self.delete(f"tasks/{urllib.parse.quote(str(task_id), safe='')}")
 
     # ── File Notes ────────────────────────────────────────────────────────────
 
@@ -703,7 +842,7 @@ class ActionstepClient:
         return self.get("filenotes", params)
 
     def get_file_note(self, note_id):
-        return self.get(f"filenotes/{note_id}")
+        return self.get(f"filenotes/{urllib.parse.quote(str(note_id), safe='')}")
 
     def create_file_note(self, action_id, note, **fields):
         # API field is "text", not "note"
@@ -714,10 +853,14 @@ class ActionstepClient:
         # Remap "note" kwarg to "text" if passed
         if "note" in fields:
             fields["text"] = fields.pop("note")
-        return self.put(f"filenotes/{note_id}", "filenotes", fields)
+        return self.put(
+            f"filenotes/{urllib.parse.quote(str(note_id), safe='')}",
+            "filenotes",
+            fields,
+        )
 
     def delete_file_note(self, note_id):
-        return self.delete(f"filenotes/{note_id}")
+        return self.delete(f"filenotes/{urllib.parse.quote(str(note_id), safe='')}")
 
     # ── Scratch Notes ─────────────────────────────────────────────────────────
 
@@ -725,7 +868,7 @@ class ActionstepClient:
         return self.get("scratchnotes", {"page": page, "pageSize": limit})
 
     def get_scratch_note(self, note_id):
-        return self.get(f"scratchnotes/{note_id}")
+        return self.get(f"scratchnotes/{urllib.parse.quote(str(note_id), safe='')}")
 
     def create_scratch_note(self, note, **fields):
         # API field is "text", not "note"
@@ -734,10 +877,14 @@ class ActionstepClient:
     def update_scratch_note(self, note_id, **fields):
         if "note" in fields:
             fields["text"] = fields.pop("note")
-        return self.put(f"scratchnotes/{note_id}", "scratchnotes", fields)
+        return self.put(
+            f"scratchnotes/{urllib.parse.quote(str(note_id), safe='')}",
+            "scratchnotes",
+            fields,
+        )
 
     def delete_scratch_note(self, note_id):
-        return self.delete(f"scratchnotes/{note_id}")
+        return self.delete(f"scratchnotes/{urllib.parse.quote(str(note_id), safe='')}")
 
     # ── Time Records ──────────────────────────────────────────────────────────
 
@@ -748,7 +895,7 @@ class ActionstepClient:
         return self.get("timerecords", params)
 
     def get_time_record(self, record_id):
-        return self.get(f"timerecords/{record_id}")
+        return self.get(f"timerecords/{urllib.parse.quote(str(record_id), safe='')}")
 
     def create_time_record(self, action_id, start_timestamp, **fields):
         data = {
@@ -759,10 +906,14 @@ class ActionstepClient:
         return self.post("timerecords", "timerecords", data)
 
     def update_time_record(self, record_id, **fields):
-        return self.put(f"timerecords/{record_id}", "timerecords", fields)
+        return self.put(
+            f"timerecords/{urllib.parse.quote(str(record_id), safe='')}",
+            "timerecords",
+            fields,
+        )
 
     def delete_time_record(self, record_id):
-        return self.delete(f"timerecords/{record_id}")
+        return self.delete(f"timerecords/{urllib.parse.quote(str(record_id), safe='')}")
 
     # ── Time Entries ──────────────────────────────────────────────────────────
 
@@ -773,7 +924,7 @@ class ActionstepClient:
         return self.get("timeentries", params)
 
     def get_time_entry(self, entry_id):
-        return self.get(f"timeentries/{entry_id}")
+        return self.get(f"timeentries/{urllib.parse.quote(str(entry_id), safe='')}")
 
     def create_time_entry(self, action_id=None, **fields):
         data = {**fields}
@@ -782,10 +933,14 @@ class ActionstepClient:
         return self.post("timeentries", "timeentries", data)
 
     def update_time_entry(self, entry_id, **fields):
-        return self.put(f"timeentries/{entry_id}", "timeentries", fields)
+        return self.put(
+            f"timeentries/{urllib.parse.quote(str(entry_id), safe='')}",
+            "timeentries",
+            fields,
+        )
 
     def delete_time_entry(self, entry_id):
-        return self.delete(f"timeentries/{entry_id}")
+        return self.delete(f"timeentries/{urllib.parse.quote(str(entry_id), safe='')}")
 
     # ── Time Record Activities ────────────────────────────────────────────────
 
@@ -793,7 +948,9 @@ class ActionstepClient:
         return self.get("timerecordactivities")
 
     def get_time_record_activity(self, activity_id):
-        return self.get(f"timerecordactivities/{activity_id}")
+        return self.get(
+            f"timerecordactivities/{urllib.parse.quote(str(activity_id), safe='')}"
+        )
 
     def create_time_record_activity(self, name, **fields):
         return self.post(
@@ -809,7 +966,9 @@ class ActionstepClient:
         return self.get("disbursements", params)
 
     def get_disbursement(self, disbursement_id):
-        return self.get(f"disbursements/{disbursement_id}")
+        return self.get(
+            f"disbursements/{urllib.parse.quote(str(disbursement_id), safe='')}"
+        )
 
     def create_disbursement(self, action_id, amount, description="", **fields):
         # API field is "unitPrice" (not "amount")
@@ -823,10 +982,16 @@ class ActionstepClient:
         return self.post("disbursements", "disbursements", data)
 
     def update_disbursement(self, disbursement_id, **fields):
-        return self.put(f"disbursements/{disbursement_id}", "disbursements", fields)
+        return self.put(
+            f"disbursements/{urllib.parse.quote(str(disbursement_id), safe='')}",
+            "disbursements",
+            fields,
+        )
 
     def delete_disbursement(self, disbursement_id):
-        return self.delete(f"disbursements/{disbursement_id}")
+        return self.delete(
+            f"disbursements/{urllib.parse.quote(str(disbursement_id), safe='')}"
+        )
 
     # ── Calendar Appointments ─────────────────────────────────────────────────
 
@@ -837,7 +1002,9 @@ class ActionstepClient:
         return self.get("calendarappointments", params)
 
     def get_calendar_appointment(self, appt_id):
-        return self.get(f"calendarappointments/{appt_id}")
+        return self.get(
+            f"calendarappointments/{urllib.parse.quote(str(appt_id), safe='')}"
+        )
 
     def create_calendar_appointment(
         self, subject, start, end, action_id=None, calendar_id=None, **fields
@@ -867,11 +1034,15 @@ class ActionstepClient:
         if "end" in fields:
             fields["endTimestamp"] = fields.pop("end")
         return self.put(
-            f"calendarappointments/{appt_id}", "calendarappointments", fields
+            f"calendarappointments/{urllib.parse.quote(str(appt_id), safe='')}",
+            "calendarappointments",
+            fields,
         )
 
     def delete_calendar_appointment(self, appt_id):
-        return self.delete(f"calendarappointments/{appt_id}")
+        return self.delete(
+            f"calendarappointments/{urllib.parse.quote(str(appt_id), safe='')}"
+        )
 
     # ── Emails ────────────────────────────────────────────────────────────────
 
@@ -882,7 +1053,7 @@ class ActionstepClient:
         return self.get("emails", params)
 
     def get_email(self, email_id):
-        return self.get(f"emails/{email_id}")
+        return self.get(f"emails/{urllib.parse.quote(str(email_id), safe='')}")
 
     def create_email(self, subject, body, to_address, action_id=None, **fields):
         # API fields: "subject", "bodyText", "to" (not body/toAddress)
@@ -892,10 +1063,12 @@ class ActionstepClient:
         return self.post("emails", "emails", data)
 
     def update_email(self, email_id, **fields):
-        return self.put(f"emails/{email_id}", "emails", fields)
+        return self.put(
+            f"emails/{urllib.parse.quote(str(email_id), safe='')}", "emails", fields
+        )
 
     def delete_email(self, email_id):
-        return self.delete(f"emails/{email_id}")
+        return self.delete(f"emails/{urllib.parse.quote(str(email_id), safe='')}")
 
     # ── Email Associations ────────────────────────────────────────────────────
 
@@ -906,14 +1079,18 @@ class ActionstepClient:
         return self.get("emailassociations", params)
 
     def get_email_association(self, assoc_id):
-        return self.get(f"emailassociations/{assoc_id}")
+        return self.get(
+            f"emailassociations/{urllib.parse.quote(str(assoc_id), safe='')}"
+        )
 
     def create_email_association(self, email_id, action_id):
         data = {"links": {"email": str(email_id), "action": str(action_id)}}
         return self.post("emailassociations", "emailassociations", data)
 
     def delete_email_association(self, assoc_id):
-        return self.delete(f"emailassociations/{assoc_id}")
+        return self.delete(
+            f"emailassociations/{urllib.parse.quote(str(assoc_id), safe='')}"
+        )
 
     # ── Email Attachments ─────────────────────────────────────────────────────
 
@@ -924,14 +1101,18 @@ class ActionstepClient:
         return self.get("emailattachments", params)
 
     def get_email_attachment(self, attach_id):
-        return self.get(f"emailattachments/{attach_id}")
+        return self.get(
+            f"emailattachments/{urllib.parse.quote(str(attach_id), safe='')}"
+        )
 
     def create_email_attachment(self, email_id, file_name, **fields):
         data = {"fileName": file_name, "links": {"email": str(email_id)}, **fields}
         return self.post("emailattachments", "emailattachments", data)
 
     def delete_email_attachment(self, attach_id):
-        return self.delete(f"emailattachments/{attach_id}")
+        return self.delete(
+            f"emailattachments/{urllib.parse.quote(str(attach_id), safe='')}"
+        )
 
     # ── SMS ───────────────────────────────────────────────────────────────────
 
@@ -942,7 +1123,7 @@ class ActionstepClient:
         return self.get("sms", params)
 
     def get_sms(self, sms_id):
-        return self.get(f"sms/{sms_id}")
+        return self.get(f"sms/{urllib.parse.quote(str(sms_id), safe='')}")
 
     def create_sms(self, message, to_number, action_id=None, **fields):
         # API fields: "text" (not message), "number" (not toNumber)
@@ -952,7 +1133,9 @@ class ActionstepClient:
         return self.post("sms", "sms", data)
 
     def update_sms(self, sms_id, **fields):
-        return self.put(f"sms/{sms_id}", "sms", fields)
+        return self.put(
+            f"sms/{urllib.parse.quote(str(sms_id), safe='')}", "sms", fields
+        )
 
     # ── Phone Records ─────────────────────────────────────────────────────────
 
@@ -963,7 +1146,7 @@ class ActionstepClient:
         return self.get("phonerecords", params)
 
     def get_phone_record(self, record_id):
-        return self.get(f"phonerecords/{record_id}")
+        return self.get(f"phonerecords/{urllib.parse.quote(str(record_id), safe='')}")
 
     def create_phone_record(self, participant_id, number, phone_type="", **fields):
         data = {
@@ -976,10 +1159,16 @@ class ActionstepClient:
         return self.post("phonerecords", "phonerecords", data)
 
     def update_phone_record(self, record_id, **fields):
-        return self.put(f"phonerecords/{record_id}", "phonerecords", fields)
+        return self.put(
+            f"phonerecords/{urllib.parse.quote(str(record_id), safe='')}",
+            "phonerecords",
+            fields,
+        )
 
     def delete_phone_record(self, record_id):
-        return self.delete(f"phonerecords/{record_id}")
+        return self.delete(
+            f"phonerecords/{urllib.parse.quote(str(record_id), safe='')}"
+        )
 
     # ── Quick Codes ───────────────────────────────────────────────────────────
 
@@ -990,7 +1179,7 @@ class ActionstepClient:
         return self.get("quickcodes", params)
 
     def get_quick_code(self, code_id):
-        return self.get(f"quickcodes/{code_id}")
+        return self.get(f"quickcodes/{urllib.parse.quote(str(code_id), safe='')}")
 
     def create_quick_code(self, code, description, code_type, **fields):
         return self.post(
@@ -1000,7 +1189,11 @@ class ActionstepClient:
         )
 
     def update_quick_code(self, code_id, **fields):
-        return self.put(f"quickcodes/{code_id}", "quickcodes", fields)
+        return self.put(
+            f"quickcodes/{urllib.parse.quote(str(code_id), safe='')}",
+            "quickcodes",
+            fields,
+        )
 
     # ── Data Collections ──────────────────────────────────────────────────────
 
@@ -1008,16 +1201,20 @@ class ActionstepClient:
         return self.get("datacollections")
 
     def get_data_collection(self, dc_id):
-        return self.get(f"datacollections/{dc_id}")
+        return self.get(f"datacollections/{urllib.parse.quote(str(dc_id), safe='')}")
 
     def create_data_collection(self, name, **fields):
         return self.post("datacollections", "datacollections", {"name": name, **fields})
 
     def update_data_collection(self, dc_id, **fields):
-        return self.put(f"datacollections/{dc_id}", "datacollections", fields)
+        return self.put(
+            f"datacollections/{urllib.parse.quote(str(dc_id), safe='')}",
+            "datacollections",
+            fields,
+        )
 
     def delete_data_collection(self, dc_id):
-        return self.delete(f"datacollections/{dc_id}")
+        return self.delete(f"datacollections/{urllib.parse.quote(str(dc_id), safe='')}")
 
     # ── Data Collection Fields ────────────────────────────────────────────────
 
@@ -1028,7 +1225,9 @@ class ActionstepClient:
         return self.get("datacollectionfields", params)
 
     def get_data_collection_field(self, field_id):
-        return self.get(f"datacollectionfields/{field_id}")
+        return self.get(
+            f"datacollectionfields/{urllib.parse.quote(str(field_id), safe='')}"
+        )
 
     def create_data_collection_field(self, dc_id, name, field_type, **fields):
         data = {
@@ -1041,11 +1240,15 @@ class ActionstepClient:
 
     def update_data_collection_field(self, field_id, **fields):
         return self.put(
-            f"datacollectionfields/{field_id}", "datacollectionfields", fields
+            f"datacollectionfields/{urllib.parse.quote(str(field_id), safe='')}",
+            "datacollectionfields",
+            fields,
         )
 
     def delete_data_collection_field(self, field_id):
-        return self.delete(f"datacollectionfields/{field_id}")
+        return self.delete(
+            f"datacollectionfields/{urllib.parse.quote(str(field_id), safe='')}"
+        )
 
     # ── Data Collection Records ───────────────────────────────────────────────
 
@@ -1058,7 +1261,9 @@ class ActionstepClient:
         return self.get("datacollectionrecords", params)
 
     def get_data_collection_record(self, record_id):
-        return self.get(f"datacollectionrecords/{record_id}")
+        return self.get(
+            f"datacollectionrecords/{urllib.parse.quote(str(record_id), safe='')}"
+        )
 
     def create_data_collection_record(self, dc_id, action_id, **fields):
         data = {
@@ -1072,11 +1277,15 @@ class ActionstepClient:
 
     def update_data_collection_record(self, record_id, **fields):
         return self.put(
-            f"datacollectionrecords/{record_id}", "datacollectionrecords", fields
+            f"datacollectionrecords/{urllib.parse.quote(str(record_id), safe='')}",
+            "datacollectionrecords",
+            fields,
         )
 
     def delete_data_collection_record(self, record_id):
-        return self.delete(f"datacollectionrecords/{record_id}")
+        return self.delete(
+            f"datacollectionrecords/{urllib.parse.quote(str(record_id), safe='')}"
+        )
 
     # ── Data Collection Record Values ─────────────────────────────────────────
 
@@ -1087,7 +1296,9 @@ class ActionstepClient:
         return self.get("datacollectionrecordvalues", params)
 
     def get_data_collection_record_value(self, value_id):
-        return self.get(f"datacollectionrecordvalues/{value_id}")
+        return self.get(
+            f"datacollectionrecordvalues/{urllib.parse.quote(str(value_id), safe='')}"
+        )
 
     def create_data_collection_record_value(self, record_id, field_id, value):
         data = {
@@ -1103,13 +1314,15 @@ class ActionstepClient:
 
     def update_data_collection_record_value(self, value_id, value):
         return self.put(
-            f"datacollectionrecordvalues/{value_id}",
+            f"datacollectionrecordvalues/{urllib.parse.quote(str(value_id), safe='')}",
             "datacollectionrecordvalues",
             {"value": value},
         )
 
     def delete_data_collection_record_value(self, value_id):
-        return self.delete(f"datacollectionrecordvalues/{value_id}")
+        return self.delete(
+            f"datacollectionrecordvalues/{urllib.parse.quote(str(value_id), safe='')}"
+        )
 
     # ── Rest Hooks (Webhooks) ─────────────────────────────────────────────────
 
@@ -1117,7 +1330,7 @@ class ActionstepClient:
         return self.get("resthooks")
 
     def get_rest_hook(self, hook_id):
-        return self.get(f"resthooks/{hook_id}")
+        return self.get(f"resthooks/{urllib.parse.quote(str(hook_id), safe='')}")
 
     def create_rest_hook(self, event_name, target_url):
         _validate_webhook_url(target_url)
@@ -1132,10 +1345,12 @@ class ActionstepClient:
         if target_url:
             _validate_webhook_url(target_url)
             data["targetUrl"] = target_url
-        return self.put(f"resthooks/{hook_id}", "resthooks", data)
+        return self.put(
+            f"resthooks/{urllib.parse.quote(str(hook_id), safe='')}", "resthooks", data
+        )
 
     def delete_rest_hook(self, hook_id):
-        return self.delete(f"resthooks/{hook_id}")
+        return self.delete(f"resthooks/{urllib.parse.quote(str(hook_id), safe='')}")
 
     # ── Steps ─────────────────────────────────────────────────────────────────
 
@@ -1146,7 +1361,7 @@ class ActionstepClient:
         return self.get("steps", params)
 
     def get_step(self, step_id):
-        return self.get(f"steps/{step_id}")
+        return self.get(f"steps/{urllib.parse.quote(str(step_id), safe='')}")
 
     def list_step_tasks(self, step_id=None):
         params = {}
@@ -1166,7 +1381,7 @@ class ActionstepClient:
         return self.get("roles")
 
     def get_role(self, role_id):
-        return self.get(f"roles/{role_id}")
+        return self.get(f"roles/{urllib.parse.quote(str(role_id), safe='')}")
 
     # ── Tags ──────────────────────────────────────────────────────────────────
 
@@ -1174,7 +1389,7 @@ class ActionstepClient:
         return self.get("tags")
 
     def get_tag(self, tag_id):
-        return self.get(f"tags/{tag_id}")
+        return self.get(f"tags/{urllib.parse.quote(str(tag_id), safe='')}")
 
     # ── Rates ─────────────────────────────────────────────────────────────────
 
@@ -1182,7 +1397,7 @@ class ActionstepClient:
         return self.get("rates")
 
     def get_rate(self, rate_id):
-        return self.get(f"rates/{rate_id}")
+        return self.get(f"rates/{urllib.parse.quote(str(rate_id), safe='')}")
 
     # ── Tax Codes ─────────────────────────────────────────────────────────────
 
@@ -1190,7 +1405,7 @@ class ActionstepClient:
         return self.get("taxcodes")
 
     def get_tax_code(self, code_id):
-        return self.get(f"taxcodes/{code_id}")
+        return self.get(f"taxcodes/{urllib.parse.quote(str(code_id), safe='')}")
 
     # ── UTBMS Codes ───────────────────────────────────────────────────────────
 
@@ -1201,7 +1416,7 @@ class ActionstepClient:
         return self.get("utbmscodes", params)
 
     def get_utbms_code(self, code_id):
-        return self.get(f"utbmscodes/{code_id}")
+        return self.get(f"utbmscodes/{urllib.parse.quote(str(code_id), safe='')}")
 
     def create_utbms_code(self, code, description, code_type, **fields):
         return self.post(
@@ -1211,10 +1426,14 @@ class ActionstepClient:
         )
 
     def update_utbms_code(self, code_id, **fields):
-        return self.put(f"utbmscodes/{code_id}", "utbmscodes", fields)
+        return self.put(
+            f"utbmscodes/{urllib.parse.quote(str(code_id), safe='')}",
+            "utbmscodes",
+            fields,
+        )
 
     def delete_utbms_code(self, code_id):
-        return self.delete(f"utbmscodes/{code_id}")
+        return self.delete(f"utbmscodes/{urllib.parse.quote(str(code_id), safe='')}")
 
     # ── Document Templates ────────────────────────────────────────────────────
 
@@ -1222,7 +1441,9 @@ class ActionstepClient:
         return self.get("documenttemplates")
 
     def get_document_template(self, template_id):
-        return self.get(f"documenttemplates/{template_id}")
+        return self.get(
+            f"documenttemplates/{urllib.parse.quote(str(template_id), safe='')}"
+        )
 
     # ── Task Templates ────────────────────────────────────────────────────────
 
@@ -1230,7 +1451,9 @@ class ActionstepClient:
         return self.get("tasktemplates")
 
     def get_task_template(self, template_id):
-        return self.get(f"tasktemplates/{template_id}")
+        return self.get(
+            f"tasktemplates/{urllib.parse.quote(str(template_id), safe='')}"
+        )
 
     # ── Billing Preferences ───────────────────────────────────────────────────
 
@@ -1238,7 +1461,11 @@ class ActionstepClient:
         return self.get("billingpreferences")
 
     def update_billing_preferences(self, pref_id, **fields):
-        return self.put(f"billingpreferences/{pref_id}", "billingpreferences", fields)
+        return self.put(
+            f"billingpreferences/{urllib.parse.quote(str(pref_id), safe='')}",
+            "billingpreferences",
+            fields,
+        )
 
     # ── Settings ──────────────────────────────────────────────────────────────
 
@@ -1246,7 +1473,11 @@ class ActionstepClient:
         return self.get("settings")
 
     def update_settings(self, setting_id, **fields):
-        return self.put(f"settings/{setting_id}", "settings", fields)
+        return self.put(
+            f"settings/{urllib.parse.quote(str(setting_id), safe='')}",
+            "settings",
+            fields,
+        )
 
     # ── Reference Data ────────────────────────────────────────────────────────
 
@@ -1254,31 +1485,31 @@ class ActionstepClient:
         return self.get("countries")
 
     def get_country(self, country_id):
-        return self.get(f"countries/{country_id}")
+        return self.get(f"countries/{urllib.parse.quote(str(country_id), safe='')}")
 
     def list_currencies(self):
         return self.get("currencies")
 
     def get_currency(self, currency_id):
-        return self.get(f"currencies/{currency_id}")
+        return self.get(f"currencies/{urllib.parse.quote(str(currency_id), safe='')}")
 
     def list_divisions(self):
         return self.get("divisions")
 
     def get_division(self, division_id):
-        return self.get(f"divisions/{division_id}")
+        return self.get(f"divisions/{urllib.parse.quote(str(division_id), safe='')}")
 
     def list_units(self):
         return self.get("units")
 
     def get_unit(self, unit_id):
-        return self.get(f"units/{unit_id}")
+        return self.get(f"units/{urllib.parse.quote(str(unit_id), safe='')}")
 
     def list_nodes(self):
         return self.get("nodes")
 
     def get_node(self, node_id):
-        return self.get(f"nodes/{node_id}")
+        return self.get(f"nodes/{urllib.parse.quote(str(node_id), safe='')}")
 
     def list_gender_types(self):
         return self.get("gendertypes")

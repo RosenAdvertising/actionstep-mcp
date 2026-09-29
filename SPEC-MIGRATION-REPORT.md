@@ -40,13 +40,14 @@ ruff check --no-cache actionstep_mcp tests
 uv lock --check --offline
 ```
 
-## Open product decision
+## Error behavior
 
-MCP 2.2.0 masks exception messages unless an exception is `ToolError` or
-`ResourceError`. Keeping that masking limits information leakage; explicitly
-safe `ToolError` messages could give clients more actionable feedback. Toby
-should decide whether selected errors should use that form. Existing tool
-exception handling remains unchanged.
+Tool failures use safe, actionable `ToolError` messages for recognized
+configuration, authorization, HTTP, rate-limit, validation, and transport
+conditions. Unexpected failures use a fixed masked message. Unexpected
+resource failures are masked before reaching the client or SDK logs, without
+logging the underlying exception or traceback. API response bodies, request URLs,
+credentials, and input values are not included in tool error messages.
 
 The checks above cover local, mocked behavior. Live Actionstep OAuth, API
 responses, vendor ordering, and hosted runtime behavior remain unverified.

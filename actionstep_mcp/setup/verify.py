@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from actionstep_mcp import credentials
+from actionstep_mcp.errors import safe_error
 
 CONFIG_DIR = Path.home() / ".actionstep-mcp"
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ def check_api():
                 "error_type": type(exc).__name__,
             },
         )
-        print("✗ API check failed. See the PII-free application log for a reason.")
+        print(f"✗ {safe_error(exc)}")
         return False
 
 

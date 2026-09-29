@@ -9,6 +9,7 @@ import logging
 import os
 import time
 import urllib.parse
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +19,18 @@ from actionstep_mcp import credentials
 from actionstep_mcp.errors import SafeToolError
 
 logger = logging.getLogger(__name__)
+
+
+class RetryBudget:
+    """Track aggregate Retry-After sleeps for one MCP tool invocation."""
+
+    def __init__(self, seconds=60):
+        self.remaining = seconds
+
+
+_active_retry_budget: ContextVar[RetryBudget | None] = ContextVar(
+    "actionstep_retry_budget", default=None
+)
 
 AUTH_BASE = "https://go.actionstep.com"
 REDIRECT_URI = "http://127.0.0.1:8769/callback"
@@ -177,16 +190,22 @@ class TokenManager:
             raise RuntimeError(
                 "ACTIONSTEP_CLIENT_ID and ACTIONSTEP_CLIENT_SECRET are required. Run: actionstep-mcp-setup"
             )
-        resp = requests.post(
-            TOKEN_URL,
-            data={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "refresh_token",
-                "refresh_token": self.refresh_token,
-            },
-            timeout=30,
-        )
+        try:
+            resp = requests.post(
+                TOKEN_URL,
+                data={
+                    "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET,
+                    "grant_type": "refresh_token",
+                    "refresh_token": self.refresh_token,
+                },
+                timeout=30,
+            )
+        except requests.RequestException:
+            raise SafeToolError(
+                "Actionstep authorization refresh timed out or failed; the outcome is unknown. "
+                "Check whether it completed before retrying."
+            ) from None
         if resp.status_code == 200:
             new_tokens = _json_response(resp)
             if "refresh_token" not in new_tokens:
@@ -197,6 +216,10 @@ class TokenManager:
                 new_tokens["api_endpoint"] = self.tokens["api_endpoint"]
             self.save(new_tokens)
             return new_tokens
+        if resp.status_code == 429:
+            raise SafeToolError(
+                f"Actionstep rate limit reached. Retry in {_retry_after_seconds(resp)} seconds."
+            ) from None
         logger.warning(
             "Actionstep OAuth refresh failed with status %s",
             resp.status_code,
@@ -245,16 +268,15 @@ class ActionstepClient:
         json_body=None,
         retry=True,
         _rate_retries=0,
-        _retry_deadline=None,
+        _retry_budget=None,
     ):
-        if _retry_deadline is None:
-            _retry_deadline = time.monotonic() + 60
+        retry_budget = _retry_budget or _active_retry_budget.get() or RetryBudget()
         url = self._url(path)
         try:
             resp = self.session.request(
                 method, url, params=params, json=json_body, timeout=30
             )
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        except requests.RequestException:
             if method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
                 raise SafeToolError(
                     "Actionstep connection timed out or failed; the write outcome is unknown. "
@@ -263,6 +285,9 @@ class ActionstepClient:
             raise SafeToolError(
                 "Actionstep connection timed out or failed. Check connectivity and retry."
             ) from None
+
+        if resp.status_code == 403:
+            raise RuntimeError("Actionstep API error 403")
 
         if resp.status_code == 401 and retry:
             self.tm.refresh()
@@ -273,7 +298,7 @@ class ActionstepClient:
                 params=params,
                 json_body=json_body,
                 retry=False,
-                _retry_deadline=_retry_deadline,
+                _retry_budget=retry_budget,
             )
 
         if resp.status_code == 429 and _rate_retries < 3:
@@ -288,13 +313,13 @@ class ActionstepClient:
                     "retry": _rate_retries + 1,
                 },
             )
-            remaining = max(0, _retry_deadline - time.monotonic())
-            if retry_after > remaining:
+            if retry_after > retry_budget.remaining:
                 raise SafeToolError(
                     f"Actionstep rate limit reached. Retry in {retry_after} seconds."
                 ) from None
             if retry_after > 0:
                 time.sleep(retry_after)
+                retry_budget.remaining -= retry_after
             return self._request(
                 method,
                 path,
@@ -302,7 +327,7 @@ class ActionstepClient:
                 json_body=json_body,
                 retry=retry,
                 _rate_retries=_rate_retries + 1,
-                _retry_deadline=_retry_deadline,
+                _retry_budget=retry_budget,
             )
 
         if resp.status_code == 429:
@@ -310,10 +335,7 @@ class ActionstepClient:
                 f"Actionstep rate limit reached. Retry in {_retry_after_seconds(resp)} seconds."
             )
 
-        if resp.status_code in (204, 200) and not resp.content:
-            return {"success": True}
-
-        if not resp.ok:
+        if not 200 <= resp.status_code < 300:
             logger.warning(
                 "actionstep_api_request_failed status=%s",
                 resp.status_code,
@@ -323,6 +345,9 @@ class ActionstepClient:
                 },
             )
             raise RuntimeError(f"Actionstep API error {resp.status_code}")
+
+        if resp.status_code in (204, 200) and not resp.content:
+            return {"success": True}
 
         return _json_response(resp)
 

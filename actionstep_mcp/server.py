@@ -8,7 +8,7 @@ from typing import Annotated, cast
 from mcp.server import MCPServer
 from pydantic import Field, ValidationError
 
-from .client import ActionstepClient
+from .client import ActionstepClient, RetryBudget, _active_retry_budget
 from .errors import SafeResourceError, SAFE_FALLBACK, safe_error
 
 ListLimit = Annotated[int, Field(ge=1, le=200)]
@@ -2018,6 +2018,7 @@ async def _safe_call_tool(name, arguments, context=None):
         "fire_",
     )
     token = _active_tool_is_write.set(name.startswith(write_prefixes))
+    retry_token = _active_retry_budget.set(RetryBudget())
     try:
         return await _original_call_tool(name, arguments, context)
     except Exception as exc:
@@ -2046,6 +2047,7 @@ async def _safe_call_tool(name, arguments, context=None):
         raise _safe_tool_error(exc) from None
     finally:
         _active_tool_is_write.reset(token)
+        _active_retry_budget.reset(retry_token)
 
 
 async def _safe_read_resource(uri, context=None):

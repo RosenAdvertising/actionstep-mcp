@@ -175,6 +175,17 @@ def _main():
         )
         if resp.status_code == 403:
             print(safe_error(RuntimeError("Actionstep API error 403")))
+        elif resp.status_code == 401:
+            print(
+                "Actionstep authorization was rejected. Check the client credentials "
+                "and run actionstep-mcp-setup again."
+            )
+        elif resp.status_code == 429:
+            from actionstep_mcp.client import _retry_after_seconds
+
+            print(
+                f"Actionstep rate limit reached. Retry in {_retry_after_seconds(resp)} seconds."
+            )
         else:
             print(
                 f"Token exchange failed ({resp.status_code}). Check the client credentials and authorization code."

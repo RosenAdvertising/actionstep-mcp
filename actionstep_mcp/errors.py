@@ -48,6 +48,11 @@ def safe_error(exc: Exception, *, write: bool = False) -> SafeToolError:
             "Actionstep connection timed out or failed. Check connectivity and retry."
         )
     if isinstance(exc, RequestException):
+        if write:
+            return SafeToolError(
+                "Actionstep transport failed; the write outcome is unknown. "
+                "Check whether it completed before retrying."
+            )
         return SafeToolError(
             "Actionstep transport failed. Check connectivity and retry."
         )

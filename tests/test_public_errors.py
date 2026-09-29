@@ -102,6 +102,59 @@ def test_write_timeout_has_unknown_outcome_and_is_error(monkeypatch):
     assert "sentinel" not in result["content"][0]["text"]
 
 
+@pytest.mark.parametrize(
+    ("tool_name", "failure", "expected"),
+    [
+        (
+            "get_current_user",
+            requests.Timeout,
+            "Actionstep connection timed out or failed. Check connectivity and retry.",
+        ),
+        (
+            "get_current_user",
+            requests.ConnectionError,
+            "Actionstep connection timed out or failed. Check connectivity and retry.",
+        ),
+        (
+            "create_action",
+            requests.Timeout,
+            "Actionstep connection timed out or failed; the write outcome is unknown. "
+            "Check whether it completed before retrying.",
+        ),
+        (
+            "create_action",
+            requests.ConnectionError,
+            "Actionstep connection timed out or failed; the write outcome is unknown. "
+            "Check whether it completed before retrying.",
+        ),
+    ],
+)
+def test_read_and_write_transport_errors_are_client_safe(
+    monkeypatch, tool_name, failure, expected
+):
+    class BrokenClient:
+        def get_current_user(self):
+            raise failure("secret endpoint sentinel")
+
+        def create_action(self, *args, **kwargs):
+            raise failure("secret endpoint sentinel")
+
+    monkeypatch.setattr(server, "ActionstepClient", BrokenClient)
+    arguments = (
+        {"name": "Matter", "action_type_id": "1"}
+        if tool_name == "create_action"
+        else {}
+    )
+    result = _result(
+        asyncio.run(
+            _post_modern("tools/call", {"name": tool_name, "arguments": arguments})
+        )
+    )
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == expected
+    assert "sentinel" not in result["content"][0]["text"]
+
+
 def test_request_timeout_and_path_segment_escaping():
     client = cast(Any, ActionstepClient.__new__(ActionstepClient))
     client.api_endpoint = "https://offline.invalid"
@@ -178,6 +231,80 @@ def test_retry_after_aggregate_budget_across_requests(monkeypatch):
     with pytest.raises(Exception, match="Retry in 40 seconds"):
         client._request("GET", "users")
     assert sleeps == [40]
+
+
+def test_retry_after_budget_is_shared_across_independent_tool_requests(monkeypatch):
+    client = cast(Any, ActionstepClient.__new__(ActionstepClient))
+    client.api_endpoint = "https://offline.invalid"
+    budget = client_module.RetryBudget()
+    budget_token = client_module._active_retry_budget.set(budget)
+    sleeps = []
+    monkeypatch.setattr(client_module.time, "sleep", sleeps.append)
+
+    class Response:
+        ok = True
+        content = b'{"actions": []}'
+
+        def __init__(self, status):
+            self.status_code = status
+            self.headers = {"Retry-After": "40"}
+
+        @staticmethod
+        def json():
+            return {"actions": []}
+
+    class Session:
+        statuses = iter([429, 200, 429])
+
+        def request(self, *args, **kwargs):
+            return Response(next(self.statuses))
+
+    client.session = Session()
+    try:
+        client.get("actions")
+        with pytest.raises(Exception) as exc:
+            client.get("participants")
+        assert str(exc.value) == "Actionstep rate limit reached. Retry in 40 seconds."
+        assert sleeps == [40]
+        assert budget.remaining == 20
+    finally:
+        client_module._active_retry_budget.reset(budget_token)
+
+
+def test_oauth_refresh_transport_error_reports_unknown_post_outcome(monkeypatch):
+    manager = cast(Any, TokenManager.__new__(TokenManager))
+    manager.tokens = {"refresh_token": "fake-refresh"}
+    monkeypatch.setattr(
+        client_module.requests,
+        "post",
+        lambda *args, **kwargs: (_ for _ in ()).throw(requests.Timeout("sentinel")),
+    )
+    with pytest.raises(Exception) as exc:
+        manager.refresh()
+    assert str(exc.value) == (
+        "Actionstep authorization refresh timed out or failed; the outcome is unknown. "
+        "Check whether it completed before retrying."
+    )
+
+
+@pytest.mark.parametrize("status", [302, 400, 403, 404, 500])
+def test_empty_failure_response_never_becomes_success(status):
+    client = cast(Any, ActionstepClient.__new__(ActionstepClient))
+    client.api_endpoint = "https://offline.invalid"
+
+    class Response:
+        status_code = status
+        ok = status < 400
+        content = b""
+        headers = {}
+
+    class Session:
+        def request(self, *args, **kwargs):
+            return Response()
+
+    client.session = Session()
+    with pytest.raises(RuntimeError, match=f"Actionstep API error {status}"):
+        client._request("POST", "actions")
 
 
 def test_verify_entrypoint_bad_key_reports_safe_authorization_guidance(
@@ -260,7 +387,7 @@ def test_setup_entrypoint_fake_rejected_key_has_safe_output(
         oauth_flow.main()
     assert exc.value.code == 1
     output = capsys.readouterr().out
-    assert "Token exchange failed (401)" in output
+    assert "run actionstep-mcp-setup again" in output
     assert "fake-secret-sentinel" not in output
     assert "Traceback" not in output
 

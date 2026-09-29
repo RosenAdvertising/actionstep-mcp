@@ -183,7 +183,7 @@ class TokenManager:
             self.save(new_tokens)
             return new_tokens
         logger.warning(
-            "actionstep_token_refresh_failed status=%s",
+            "Actionstep OAuth refresh failed with status %s",
             resp.status_code,
             extra={
                 "event": "actionstep_token_refresh_failed",

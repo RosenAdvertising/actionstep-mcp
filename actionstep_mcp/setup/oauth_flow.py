@@ -164,7 +164,7 @@ def main():
 
     if resp.status_code != 200:
         logger.warning(
-            "actionstep_token_exchange_failed status=%s",
+            "Actionstep OAuth code exchange failed with status %s",
             resp.status_code,
             extra={
                 "event": "actionstep_token_exchange_failed",

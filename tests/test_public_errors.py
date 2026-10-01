@@ -7,7 +7,8 @@ from typing import Any, cast
 import pytest
 import requests
 
-from actionstep_mcp import client as client_module, server
+from actionstep_mcp import client as client_module
+from actionstep_mcp import server
 from actionstep_mcp.client import ActionstepClient, TokenManager
 from actionstep_mcp.errors import SAFE_FALLBACK
 from actionstep_mcp.setup import oauth_flow, verify
@@ -155,7 +156,7 @@ def test_read_and_write_transport_errors_are_client_safe(
     assert "sentinel" not in result["content"][0]["text"]
 
 
-def test_request_timeout_and_path_segment_escaping():
+def test_request_timeout_and_path_segment_validation():
     client = cast(Any, ActionstepClient.__new__(ActionstepClient))
     client.api_endpoint = "https://offline.invalid"
 
@@ -177,10 +178,9 @@ def test_request_timeout_and_path_segment_escaping():
             return Response()
 
     client.session = Session()
-    client.get_action("../x?#/y")
+    client.get_action("normal-id")
     assert (
-        client.session.seen[1]
-        == "https://offline.invalid/api/rest/actions/..%2Fx%3F%23%2Fy"
+        client.session.seen[1] == "https://offline.invalid/api/rest/actions/normal-id"
     )
     assert client.session.seen[2]["timeout"] == 30
 

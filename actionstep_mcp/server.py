@@ -1659,6 +1659,9 @@ def get_rest_hook(hook_id: str) -> str:
 def create_rest_hook(event_name: str, target_url: str) -> str:
     """Create a webhook. event_name: ActionCreated | TaskCreated | ParticipantCreated | etc."""
     try:
+        from actionstep_mcp.client import _validate_webhook_url
+
+        _validate_webhook_url(target_url)
         return json.dumps(
             ActionstepClient().create_rest_hook(event_name, target_url), indent=2
         )
@@ -1670,6 +1673,10 @@ def create_rest_hook(event_name: str, target_url: str) -> str:
 def update_rest_hook(hook_id: str, event_name: str = "", target_url: str = "") -> str:
     """Update a webhook subscription."""
     try:
+        from actionstep_mcp.client import _validate_webhook_url
+
+        if target_url:
+            _validate_webhook_url(target_url)
         return json.dumps(
             ActionstepClient().update_rest_hook(
                 hook_id, event_name=event_name or None, target_url=target_url or None

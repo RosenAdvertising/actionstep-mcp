@@ -105,3 +105,23 @@ Actionstep uses a dynamic `api_endpoint` — the URL for your organisation's API
 MIT
 
 <!-- ci-trigger 2026-05-27 -->
+
+### Approved destination URLs
+
+Set `ACTIONSTEP_ALLOWED_DESTINATION_HOSTS` in the server environment, for example
+`ACTIONSTEP_ALLOWED_DESTINATION_HOSTS=hooks.firm.example,.integrations.firm.example`.
+Comma-separated exact hosts allow only that host; a leading dot allows the domain
+and its subdomains. Matching ignores case and trailing dots and normalizes IDNA.
+An empty or unset list refuses destination URLs before any request. HTTPS, no
+userinfo, and public literal addresses remain required. This administrator-owned
+list prevents model-supplied destinations from sending data to arbitrary hosts,
+including private-address DNS aliases and unapproved redirectors. Approve only
+hosts whose DNS and redirects the firm trusts; the vendor executes requests later.
+Tools cannot change this setting.
+
+Configured API endpoints may use any host under `actionstep.com` or
+`actionstepstaging.com`, including per-organization and regional hosts such as
+`ap-southeast-2.actionstep.com` (or `actionstepstaging.com` for staging),
+with no userinfo, query, fragment, or non-default port. Both an origin and the
+vendor-returned `/api/` base are accepted. See the
+[Actionstep authentication documentation](https://docs.actionstep.com/authentication).

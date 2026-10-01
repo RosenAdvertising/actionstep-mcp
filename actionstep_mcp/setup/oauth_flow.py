@@ -209,6 +209,14 @@ def _main():
         print("Error: API endpoint is required.")
         sys.exit(1)
 
+    from actionstep_mcp.url_security import validate_api_endpoint
+
+    try:
+        api_endpoint = validate_api_endpoint(api_endpoint)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    tokens["api_endpoint"] = api_endpoint
     print("API endpoint received.")
 
     backend = credentials.set_secret("ACTIONSTEP_CLIENT_ID", client_id)

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Actionstep API client. OAuth 2.0 auth code flow, dynamic api_endpoint, wrapped body format."""
 
-import ipaddress
 import json
 import logging
 import math
@@ -18,6 +17,11 @@ import requests
 
 from actionstep_mcp import credentials
 from actionstep_mcp.errors import SafeToolError
+from actionstep_mcp.url_security import (
+    UnsafeURL,
+    validate_api_endpoint,
+    validate_public_https,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,18 +66,6 @@ credentials.load_into_environ(
     ["ACTIONSTEP_CLIENT_ID", "ACTIONSTEP_CLIENT_SECRET", "ACTIONSTEP_API_ENDPOINT"]
 )
 
-# Private/reserved address ranges that must not receive webhook payloads (SSRF hygiene).
-_PRIVATE_NETS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-]
-
 
 def _log_guard_rejection(reason: str) -> None:
     """Log a fixed rejection reason without user, URL, or credential data."""
@@ -85,49 +77,15 @@ def _log_guard_rejection(reason: str) -> None:
 
 
 def _validate_webhook_url(url: str) -> None:
-    """Raise ValueError if url is not a safe https endpoint for webhook delivery.
-
-    Enforces:
-    - scheme must be https (prevents cleartext delivery)
-    - hostname must not resolve to a private, loopback, or link-local address
-      (prevents SSRF — Actionstep posting matter data to an internal service)
-
-    Note: this is a best-effort syntactic check on the literal hostname.  DNS
-    resolution at call time is not performed; a split-horizon DNS attack or a
-    hostname that resolves differently at Actionstep's side is out of scope.
-    """
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https":
-        _log_guard_rejection("webhook_non_https_scheme")
-        raise ValueError(
-            f"Webhook target_url must use https (got '{parsed.scheme}'). "
-            "Plain-http endpoints would receive Actionstep matter data unencrypted."
-        )
-    hostname = parsed.hostname or ""
-    if not hostname:
-        _log_guard_rejection("webhook_missing_hostname")
-        raise ValueError("Webhook target_url must include a hostname.")
-    # Reject bare IP addresses in private ranges
+    """Validate the destination against administrator configuration."""
     try:
-        addr = ipaddress.ip_address(hostname)
-    except ValueError:
-        addr = None
-    if addr is not None:
-        for net in _PRIVATE_NETS:
-            if addr in net:
-                _log_guard_rejection("webhook_private_address")
-                raise ValueError(
-                    f"Webhook target_url hostname '{hostname}' is a private/loopback/"
-                    "link-local address. Webhooks must target a firm-controlled public endpoint."
-                )
-    # Reject well-known loopback/internal hostnames
-    _BLOCKED_HOSTS = {"localhost", "local", "internal", "metadata.google.internal"}
-    if hostname.lower() in _BLOCKED_HOSTS or hostname.lower().endswith(".local"):
-        _log_guard_rejection("webhook_reserved_hostname")
-        raise ValueError(
-            f"Webhook target_url hostname '{hostname}' is a reserved/internal hostname. "
-            "Webhooks must target a firm-controlled public endpoint."
-        )
+        validate_public_https(url)
+    except UnsafeURL as exc:
+        _log_guard_rejection("webhook_" + str(exc))
+        raise UnsafeURL(
+            "Webhook target_url must be a public HTTPS URL without userinfo. "
+            "Configure ACTIONSTEP_ALLOWED_DESTINATION_HOSTS with trusted hosts."
+        ) from None
 
 
 CLIENT_ID = os.environ.get("ACTIONSTEP_CLIENT_ID", "")
@@ -260,6 +218,7 @@ class ActionstepClient:
             raise RuntimeError(
                 "ACTIONSTEP_API_ENDPOINT not set. Run: actionstep-mcp-setup"
             )
+        self.api_endpoint = validate_api_endpoint(self.api_endpoint)
         if not self.tm.access_token and not self.tm.refresh_token:
             _log_guard_rejection("oauth_tokens_missing")
             raise RuntimeError(

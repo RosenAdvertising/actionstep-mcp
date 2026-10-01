@@ -18,6 +18,8 @@ SAFE_FALLBACK = (
 
 def safe_error(exc: Exception, *, write: bool = False) -> SafeToolError:
     """Map known failures to safe, actionable messages and mask everything else."""
+    from actionstep_mcp.url_security import UnsafeURL
+
     from requests import RequestException
 
     from requests.exceptions import (
@@ -27,6 +29,11 @@ def safe_error(exc: Exception, *, write: bool = False) -> SafeToolError:
         Timeout,
     )
 
+    if isinstance(exc, UnsafeURL):
+        return SafeToolError(
+            "Webhook target_url must be a public HTTPS URL approved by "
+            "ACTIONSTEP_ALLOWED_DESTINATION_HOSTS; configure trusted hostnames."
+        )
     if isinstance(exc, SafeToolError):
         return SafeToolError(str(exc))
     if isinstance(exc, ToolError):

@@ -46,7 +46,10 @@ def test_webhook_rejections_log_only_fixed_reasons(url, reason, caplog) -> None:
     "hostname",
     ("private.example.com", "loopback.example.com", "link-local.example.com"),
 )
-def test_public_dns_names_are_not_misclassified_as_private(hostname) -> None:
+def test_public_dns_names_are_not_misclassified_as_private(
+    hostname, monkeypatch
+) -> None:
+    monkeypatch.setenv("ACTIONSTEP_ALLOWED_DESTINATION_HOSTS", hostname)
     _validate_webhook_url(f"https://{hostname}/hook")
 
 

@@ -23,6 +23,8 @@ from actionstep_mcp.url_security import (
     validate_public_https,
 )
 
+from actionstep_mcp.private_file import write_private_file
+
 logger = logging.getLogger(__name__)
 
 
@@ -139,13 +141,10 @@ class TokenManager:
         return {}
 
     def save(self, tokens):
-        self.token_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(self.token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w") as f:
-            os.fchmod(f.fileno(), 0o600)
-            json.dump(tokens, f, indent=2)
-        os.chmod(self.token_file, 0o600)
+        self.token_file.parent.mkdir(
+            parents=True, exist_ok=True, mode=0o777 if os.name == "nt" else 0o700
+        )
+        write_private_file(self.token_file, json.dumps(tokens, indent=2))
         self.tokens = tokens
 
     @property

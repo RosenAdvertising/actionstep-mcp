@@ -11,7 +11,6 @@ falling back to a 0600 ``.env`` file when no keyring backend is available or
 import hmac
 import json
 import logging
-import os
 import secrets
 import sys
 import webbrowser
@@ -24,6 +23,8 @@ import requests
 
 from actionstep_mcp import credentials
 from actionstep_mcp.errors import safe_error
+
+from actionstep_mcp.private_file import write_private_file
 
 logger = logging.getLogger(__name__)
 
@@ -233,12 +234,7 @@ def _main():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     token_file = CONFIG_DIR / "tokens.json"
-    fd = os.open(token_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w") as f:
-        os.fchmod(f.fileno(), 0o600)
-        json.dump(tokens, f, indent=2)
-    os.chmod(token_file, 0o600)
+    write_private_file(token_file, json.dumps(tokens, indent=2))
 
     print("✓ Tokens saved to the protected local token store (0600).")
     print("\nRun 'actionstep-mcp-verify' to test the connection.")

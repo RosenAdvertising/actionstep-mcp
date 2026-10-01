@@ -79,8 +79,9 @@ Secrets saved to keyring use the service name `actionstep-mcp`.
 without Secret Service), or if you set `ACTIONSTEP_MCP_USE_KEYRING=0`, credentials
 fall back to a `~/.actionstep-mcp/.env` file with `0600` permissions.
 
-On Windows, the OS credential store is used; the file fallback is not supported
-because private secret-file writes require `os.fchmod`.
+On Windows, the file is stored in the user's profile and protected by Windows'
+default per-user access rules. On POSIX, files are created with `0600` permissions
+and writes fail closed if private permissions cannot be established.
 
 **Read order.** Credentials resolve in the order OS keyring → process environment
 → `.env` file. So a rotated secret in the keyring always wins, and an

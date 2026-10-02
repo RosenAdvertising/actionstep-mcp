@@ -24,7 +24,7 @@ def _safe_tool_error(exc: Exception):
 
 mcp = MCPServer(
     "actionstep-mcp",
-    version="0.1.0",
+    version="0.2.0",
     instructions=(
         "Full access to Actionstep practice management: actions (matters), participants "
         "(contacts), tasks, time records, time entries, disbursements, calendar, emails, "

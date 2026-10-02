@@ -1,12 +1,30 @@
 #!/usr/bin/env python3
-"""Actionstep MCP Server — full Actionstep API coverage via FastMCP."""
+"""Actionstep MCP Server — full Actionstep API coverage via MCPServer."""
 
 import json
-from mcp.server.fastmcp import FastMCP
-from .client import ActionstepClient
+from contextvars import ContextVar
+from typing import Annotated, cast
 
-mcp = FastMCP(
+from mcp.server import MCPServer
+from pydantic import Field, ValidationError
+
+from .client import ActionstepClient, RetryBudget, _active_retry_budget
+from .errors import SafeResourceError, SAFE_FALLBACK, safe_error
+
+ListLimit = Annotated[int, Field(ge=1, le=200)]
+PageNumber = Annotated[int, Field(ge=1)]
+_active_tool_is_write: ContextVar[bool] = ContextVar(
+    "actionstep_tool_is_write", default=False
+)
+
+
+def _safe_tool_error(exc: Exception):
+    return safe_error(exc, write=_active_tool_is_write.get())
+
+
+mcp = MCPServer(
     "actionstep-mcp",
+    version="0.1.0",
     instructions=(
         "Full access to Actionstep practice management: actions (matters), participants "
         "(contacts), tasks, time records, time entries, disbursements, calendar, emails, "
@@ -24,7 +42,7 @@ def get_current_user() -> str:
     try:
         return json.dumps(ActionstepClient().get_current_user(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -33,7 +51,7 @@ def list_users() -> str:
     try:
         return json.dumps(ActionstepClient().list_users(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -42,7 +60,7 @@ def get_user(user_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_user(user_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Actions (Matters) ─────────────────────────────────────────────────────────
@@ -50,7 +68,10 @@ def get_user(user_id: str) -> str:
 
 @mcp.tool()
 def list_actions(
-    action_type: str = "", status: str = "", limit: int = 50, page: int = 1
+    action_type: str = "",
+    status: str = "",
+    limit: ListLimit = 50,
+    page: PageNumber = 1,
 ) -> str:
     """List actions (matters/cases). action_type: filter by action type ID. status: open|closed."""
     try:
@@ -64,7 +85,7 @@ def list_actions(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -73,7 +94,7 @@ def get_action(action_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_action(action_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -87,7 +108,7 @@ def create_action(name: str, action_type_id: str, assigned_to_id: str = "") -> s
             ActionstepClient().create_action(name, action_type_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -107,7 +128,7 @@ def update_action(
             ActionstepClient().update_action(action_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Types ──────────────────────────────────────────────────────────────
@@ -126,7 +147,7 @@ def list_action_types(is_billable: str = "") -> str:
             ActionstepClient().list_action_types(is_billable=billable_filter), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -135,7 +156,7 @@ def get_action_type(action_type_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_action_type(action_type_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Bill Settings ──────────────────────────────────────────────────────
@@ -150,7 +171,7 @@ def list_action_bill_settings(action_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -161,7 +182,7 @@ def get_action_bill_settings(settings_id: str) -> str:
             ActionstepClient().get_action_bill_settings(settings_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -180,7 +201,7 @@ def update_action_bill_settings(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Change Steps ───────────────────────────────────────────────────────
@@ -195,7 +216,7 @@ def list_action_change_steps(action_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -209,7 +230,7 @@ def transition_action_step(action_id: str, step_id: str, node_id: str = "") -> s
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Documents ──────────────────────────────────────────────────────────
@@ -224,7 +245,7 @@ def list_action_documents(action_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -233,7 +254,7 @@ def get_action_document(document_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_action_document(document_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -247,7 +268,7 @@ def create_action_document(action_id: str, file_name: str, folder_id: str = "") 
             ActionstepClient().create_action_document(action_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -258,7 +279,7 @@ def delete_action_document(document_id: str) -> str:
             ActionstepClient().delete_action_document(document_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Folders ────────────────────────────────────────────────────────────
@@ -273,7 +294,7 @@ def list_action_folders(action_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -282,7 +303,7 @@ def get_action_folder(folder_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_action_folder(folder_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -293,7 +314,7 @@ def create_action_folder(action_id: str, name: str) -> str:
             ActionstepClient().create_action_folder(action_id, name), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -304,7 +325,7 @@ def update_action_folder(folder_id: str, name: str) -> str:
             ActionstepClient().update_action_folder(folder_id, name=name), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -313,7 +334,7 @@ def delete_action_folder(folder_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_action_folder(folder_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Participants ───────────────────────────────────────────────────────
@@ -328,7 +349,7 @@ def list_action_participants(action_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -337,7 +358,7 @@ def get_action_participant(ap_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_action_participant(ap_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -353,7 +374,7 @@ def add_participant_to_action(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -362,7 +383,7 @@ def remove_participant_from_action(ap_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_action_participant(ap_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Permissions ────────────────────────────────────────────────────────
@@ -377,7 +398,7 @@ def list_action_permissions(action_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Rates ──────────────────────────────────────────────────────────────
@@ -391,7 +412,7 @@ def list_action_rates(action_id: str = "") -> str:
             ActionstepClient().list_action_rates(action_id=action_id or None), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -400,7 +421,7 @@ def get_action_rate(rate_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_action_rate(rate_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -416,7 +437,7 @@ def create_action_rate(
             ActionstepClient().create_action_rate(action_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -427,7 +448,7 @@ def update_action_rate(rate_id: str, rate: float) -> str:
             ActionstepClient().update_action_rate(rate_id, rate=rate), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -436,7 +457,7 @@ def delete_action_rate(rate_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_action_rate(rate_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Action Type Folders ───────────────────────────────────────────────────────
@@ -453,7 +474,7 @@ def list_action_type_folders(action_type_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -464,7 +485,7 @@ def get_action_type_folder(folder_id: str) -> str:
             ActionstepClient().get_action_type_folder(folder_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -475,7 +496,7 @@ def create_action_type_folder(action_type_id: str, name: str) -> str:
             ActionstepClient().create_action_type_folder(action_type_id, name), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -486,21 +507,21 @@ def delete_action_type_folder(folder_id: str) -> str:
             ActionstepClient().delete_action_type_folder(folder_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Participants (Contacts) ───────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_participants(page: int = 1, limit: int = 50) -> str:
+def list_participants(page: PageNumber = 1, limit: ListLimit = 50) -> str:
     """List participants (contacts/clients)."""
     try:
         return json.dumps(
             ActionstepClient().list_participants(page=page, limit=limit), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -509,7 +530,7 @@ def get_participant(participant_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_participant(participant_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -536,7 +557,7 @@ def create_participant(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -556,7 +577,7 @@ def update_participant(
             ActionstepClient().update_participant(participant_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -567,7 +588,7 @@ def delete_participant(participant_id: str) -> str:
             ActionstepClient().delete_participant(participant_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Participant Types ─────────────────────────────────────────────────────────
@@ -579,7 +600,7 @@ def list_participant_types() -> str:
     try:
         return json.dumps(ActionstepClient().list_participant_types(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -588,7 +609,7 @@ def get_participant_type(pt_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_participant_type(pt_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Contact Relationships ─────────────────────────────────────────────────────
@@ -605,7 +626,7 @@ def list_contact_relationships(participant_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -614,7 +635,7 @@ def get_contact_relationship(cr_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_contact_relationship(cr_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -630,7 +651,7 @@ def create_contact_relationship(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Contact Documents ─────────────────────────────────────────────────────────
@@ -647,7 +668,7 @@ def list_contact_documents(participant_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -656,7 +677,7 @@ def get_contact_document(doc_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_contact_document(doc_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -665,7 +686,7 @@ def delete_contact_document(doc_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_contact_document(doc_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Contact Folders ───────────────────────────────────────────────────────────
@@ -682,7 +703,7 @@ def list_contact_folders(participant_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -693,7 +714,7 @@ def create_contact_folder(participant_id: str, name: str) -> str:
             ActionstepClient().create_contact_folder(participant_id, name), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -702,7 +723,7 @@ def delete_contact_folder(folder_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_contact_folder(folder_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Contact Notes ─────────────────────────────────────────────────────────────
@@ -719,7 +740,7 @@ def list_contact_notes(participant_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -728,7 +749,7 @@ def get_contact_note(note_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_contact_note(note_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -739,7 +760,7 @@ def create_contact_note(participant_id: str, note: str) -> str:
             ActionstepClient().create_contact_note(participant_id, note), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -750,7 +771,7 @@ def update_contact_note(note_id: str, note: str) -> str:
             ActionstepClient().update_contact_note(note_id, note=note), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -759,14 +780,16 @@ def delete_contact_note(note_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_contact_note(note_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Phone Records ─────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_phone_records(participant_id: str = "", limit: int = 50, page: int = 1) -> str:
+def list_phone_records(
+    participant_id: str = "", limit: ListLimit = 50, page: PageNumber = 1
+) -> str:
     """List phone numbers for participants."""
     try:
         return json.dumps(
@@ -776,7 +799,7 @@ def list_phone_records(participant_id: str = "", limit: int = 50, page: int = 1)
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -785,7 +808,7 @@ def get_phone_record(record_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_phone_record(record_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -801,7 +824,7 @@ def create_phone_record(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -817,7 +840,7 @@ def update_phone_record(record_id: str, number: str = "", phone_type: str = "") 
             ActionstepClient().update_phone_record(record_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -826,7 +849,7 @@ def delete_phone_record(record_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_phone_record(record_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────────────
@@ -834,7 +857,10 @@ def delete_phone_record(record_id: str) -> str:
 
 @mcp.tool()
 def list_tasks(
-    action_id: str = "", assignee_id: str = "", page: int = 1, limit: int = 50
+    action_id: str = "",
+    assignee_id: str = "",
+    page: PageNumber = 1,
+    limit: ListLimit = 50,
 ) -> str:
     """List tasks. Filter by action_id (matter) or assignee_id (user)."""
     try:
@@ -848,7 +874,7 @@ def list_tasks(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -857,7 +883,7 @@ def get_task(task_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_task(task_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -884,7 +910,7 @@ def create_task(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -908,7 +934,7 @@ def update_task(
             fields["priority"] = priority
         return json.dumps(ActionstepClient().update_task(task_id, **fields), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -917,14 +943,16 @@ def delete_task(task_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_task(task_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── File Notes ────────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_file_notes(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_file_notes(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List file notes (case notes/attendance notes) on actions."""
     try:
         return json.dumps(
@@ -934,7 +962,7 @@ def list_file_notes(action_id: str = "", page: int = 1, limit: int = 50) -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -943,7 +971,7 @@ def get_file_note(note_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_file_note(note_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -957,7 +985,7 @@ def create_file_note(action_id: str, note: str, note_type: str = "") -> str:
             ActionstepClient().create_file_note(action_id, note, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -968,7 +996,7 @@ def update_file_note(note_id: str, note: str) -> str:
             ActionstepClient().update_file_note(note_id, note=note), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -977,21 +1005,21 @@ def delete_file_note(note_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_file_note(note_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Scratch Notes ─────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_scratch_notes(page: int = 1, limit: int = 50) -> str:
+def list_scratch_notes(page: PageNumber = 1, limit: ListLimit = 50) -> str:
     """List scratch notes (quick personal notes)."""
     try:
         return json.dumps(
             ActionstepClient().list_scratch_notes(page=page, limit=limit), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1000,7 +1028,7 @@ def get_scratch_note(note_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_scratch_note(note_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1009,7 +1037,7 @@ def create_scratch_note(note: str) -> str:
     try:
         return json.dumps(ActionstepClient().create_scratch_note(note), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1020,7 +1048,7 @@ def update_scratch_note(note_id: str, note: str) -> str:
             ActionstepClient().update_scratch_note(note_id, note=note), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1029,14 +1057,16 @@ def delete_scratch_note(note_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_scratch_note(note_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Time Records ──────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_time_records(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_time_records(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List time records (timer sessions). Filter by action_id for a specific matter."""
     try:
         return json.dumps(
@@ -1046,7 +1076,7 @@ def list_time_records(action_id: str = "", page: int = 1, limit: int = 50) -> st
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1055,7 +1085,7 @@ def get_time_record(record_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_time_record(record_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1074,7 +1104,7 @@ def create_time_record(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1090,7 +1120,7 @@ def update_time_record(record_id: str, end_timestamp: str = "", notes: str = "")
             ActionstepClient().update_time_record(record_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1099,14 +1129,16 @@ def delete_time_record(record_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_time_record(record_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Time Entries (Billable) ───────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_time_entries(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_time_entries(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List time entries (billable time). Filter by action_id for a specific matter."""
     try:
         return json.dumps(
@@ -1116,7 +1148,7 @@ def list_time_entries(action_id: str = "", page: int = 1, limit: int = 50) -> st
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1125,7 +1157,7 @@ def get_time_entry(entry_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_time_entry(entry_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1152,7 +1184,7 @@ def create_time_entry(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1170,7 +1202,7 @@ def update_time_entry(
             ActionstepClient().update_time_entry(entry_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1179,7 +1211,7 @@ def delete_time_entry(entry_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_time_entry(entry_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Time Record Activities ────────────────────────────────────────────────────
@@ -1191,7 +1223,7 @@ def list_time_record_activities() -> str:
     try:
         return json.dumps(ActionstepClient().list_time_record_activities(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1202,14 +1234,16 @@ def get_time_record_activity(activity_id: str) -> str:
             ActionstepClient().get_time_record_activity(activity_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Disbursements ─────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_disbursements(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_disbursements(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List disbursements (expenses). Filter by action_id for matter-specific expenses."""
     try:
         return json.dumps(
@@ -1219,7 +1253,7 @@ def list_disbursements(action_id: str = "", page: int = 1, limit: int = 50) -> s
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1230,7 +1264,7 @@ def get_disbursement(disbursement_id: str) -> str:
             ActionstepClient().get_disbursement(disbursement_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1249,7 +1283,7 @@ def create_disbursement(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1267,7 +1301,7 @@ def update_disbursement(
             ActionstepClient().update_disbursement(disbursement_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1278,7 +1312,7 @@ def delete_disbursement(disbursement_id: str) -> str:
             ActionstepClient().delete_disbursement(disbursement_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Calendar Appointments ─────────────────────────────────────────────────────
@@ -1286,7 +1320,7 @@ def delete_disbursement(disbursement_id: str) -> str:
 
 @mcp.tool()
 def list_calendar_appointments(
-    action_id: str = "", page: int = 1, limit: int = 50
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
 ) -> str:
     """List calendar appointments. Filter by action_id for matter-specific events."""
     try:
@@ -1297,7 +1331,7 @@ def list_calendar_appointments(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1308,7 +1342,7 @@ def get_calendar_appointment(appt_id: str) -> str:
             ActionstepClient().get_calendar_appointment(appt_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1327,7 +1361,7 @@ def create_calendar_appointment(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1347,7 +1381,7 @@ def update_calendar_appointment(
             ActionstepClient().update_calendar_appointment(appt_id, **fields), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1358,14 +1392,16 @@ def delete_calendar_appointment(appt_id: str) -> str:
             ActionstepClient().delete_calendar_appointment(appt_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Emails ────────────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_emails(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_emails(
+    action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50
+) -> str:
     """List emails. Filter by action_id to see emails on a matter."""
     try:
         return json.dumps(
@@ -1375,7 +1411,7 @@ def list_emails(action_id: str = "", page: int = 1, limit: int = 50) -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1384,7 +1420,7 @@ def get_email(email_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_email(email_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1398,7 +1434,7 @@ def create_email(subject: str, body: str, to_address: str, action_id: str = "") 
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1407,7 +1443,7 @@ def delete_email(email_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_email(email_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Email Associations ────────────────────────────────────────────────────────
@@ -1422,7 +1458,7 @@ def list_email_associations(email_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1433,7 +1469,7 @@ def create_email_association(email_id: str, action_id: str) -> str:
             ActionstepClient().create_email_association(email_id, action_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1444,14 +1480,14 @@ def delete_email_association(assoc_id: str) -> str:
             ActionstepClient().delete_email_association(assoc_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── SMS ───────────────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def list_sms(action_id: str = "", page: int = 1, limit: int = 50) -> str:
+def list_sms(action_id: str = "", page: PageNumber = 1, limit: ListLimit = 50) -> str:
     """List SMS messages. Filter by action_id for matter-specific messages."""
     try:
         return json.dumps(
@@ -1461,7 +1497,7 @@ def list_sms(action_id: str = "", page: int = 1, limit: int = 50) -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1470,7 +1506,7 @@ def get_sms(sms_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_sms(sms_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1484,7 +1520,7 @@ def create_sms(message: str, to_number: str, action_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Data Collections ──────────────────────────────────────────────────────────
@@ -1496,7 +1532,7 @@ def list_data_collections() -> str:
     try:
         return json.dumps(ActionstepClient().list_data_collections(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1505,7 +1541,7 @@ def get_data_collection(dc_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_data_collection(dc_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1517,7 +1553,7 @@ def list_data_collection_fields(dc_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1531,7 +1567,7 @@ def list_data_collection_records(dc_id: str = "", action_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1542,7 +1578,7 @@ def get_data_collection_record(record_id: str) -> str:
             ActionstepClient().get_data_collection_record(record_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1553,7 +1589,7 @@ def create_data_collection_record(dc_id: str, action_id: str) -> str:
             ActionstepClient().create_data_collection_record(dc_id, action_id), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1567,7 +1603,7 @@ def list_data_collection_record_values(record_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1583,7 +1619,7 @@ def create_data_collection_record_value(
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1595,7 +1631,7 @@ def update_data_collection_record_value(value_id: str, value: str) -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Rest Hooks (Webhooks) ─────────────────────────────────────────────────────
@@ -1607,7 +1643,7 @@ def list_rest_hooks() -> str:
     try:
         return json.dumps(ActionstepClient().list_rest_hooks(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1616,24 +1652,31 @@ def get_rest_hook(hook_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_rest_hook(hook_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
 def create_rest_hook(event_name: str, target_url: str) -> str:
     """Create a webhook. event_name: ActionCreated | TaskCreated | ParticipantCreated | etc."""
     try:
+        from actionstep_mcp.client import _validate_webhook_url
+
+        _validate_webhook_url(target_url)
         return json.dumps(
             ActionstepClient().create_rest_hook(event_name, target_url), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
 def update_rest_hook(hook_id: str, event_name: str = "", target_url: str = "") -> str:
     """Update a webhook subscription."""
     try:
+        from actionstep_mcp.client import _validate_webhook_url
+
+        if target_url:
+            _validate_webhook_url(target_url)
         return json.dumps(
             ActionstepClient().update_rest_hook(
                 hook_id, event_name=event_name or None, target_url=target_url or None
@@ -1641,7 +1684,7 @@ def update_rest_hook(hook_id: str, event_name: str = "", target_url: str = "") -
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1650,7 +1693,7 @@ def delete_rest_hook(hook_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().delete_rest_hook(hook_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Quick Codes ───────────────────────────────────────────────────────────────
@@ -1664,7 +1707,7 @@ def list_quick_codes(code_type: str = "") -> str:
             ActionstepClient().list_quick_codes(code_type=code_type or None), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1673,7 +1716,7 @@ def get_quick_code(code_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_quick_code(code_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1684,7 +1727,7 @@ def create_quick_code(code: str, description: str, code_type: str) -> str:
             ActionstepClient().create_quick_code(code, description, code_type), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── UTBMS Codes ───────────────────────────────────────────────────────────────
@@ -1698,7 +1741,7 @@ def list_utbms_codes(code_type: str = "") -> str:
             ActionstepClient().list_utbms_codes(code_type=code_type or None), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1707,7 +1750,7 @@ def get_utbms_code(code_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_utbms_code(code_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Steps & Workflow ──────────────────────────────────────────────────────────
@@ -1722,7 +1765,7 @@ def list_steps(action_type_id: str = "") -> str:
             indent=2,
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1731,7 +1774,7 @@ def get_step(step_id: str) -> str:
     try:
         return json.dumps(ActionstepClient().get_step(step_id), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1742,7 +1785,7 @@ def list_step_tasks(step_id: str = "") -> str:
             ActionstepClient().list_step_tasks(step_id=step_id or None), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Reference Data ────────────────────────────────────────────────────────────
@@ -1754,7 +1797,7 @@ def list_roles() -> str:
     try:
         return json.dumps(ActionstepClient().list_roles(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1763,7 +1806,7 @@ def list_tags() -> str:
     try:
         return json.dumps(ActionstepClient().list_tags(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1772,7 +1815,7 @@ def list_rates() -> str:
     try:
         return json.dumps(ActionstepClient().list_rates(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1781,7 +1824,7 @@ def list_tax_codes() -> str:
     try:
         return json.dumps(ActionstepClient().list_tax_codes(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1790,7 +1833,7 @@ def list_document_templates() -> str:
     try:
         return json.dumps(ActionstepClient().list_document_templates(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1799,7 +1842,7 @@ def list_task_templates() -> str:
     try:
         return json.dumps(ActionstepClient().list_task_templates(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1808,7 +1851,7 @@ def list_billing_preferences() -> str:
     try:
         return json.dumps(ActionstepClient().list_billing_preferences(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1817,7 +1860,7 @@ def list_settings() -> str:
     try:
         return json.dumps(ActionstepClient().list_settings(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1826,7 +1869,7 @@ def list_countries() -> str:
     try:
         return json.dumps(ActionstepClient().list_countries(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1835,7 +1878,7 @@ def list_currencies() -> str:
     try:
         return json.dumps(ActionstepClient().list_currencies(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1844,7 +1887,7 @@ def list_divisions() -> str:
     try:
         return json.dumps(ActionstepClient().list_divisions(), indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 @mcp.tool()
@@ -1855,7 +1898,7 @@ def list_participant_relationship_types() -> str:
             ActionstepClient().list_participant_relationship_types(), indent=2
         )
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        raise _safe_tool_error(e) from None
 
 
 # ── Resources ─────────────────────────────────────────────────────────────────
@@ -1890,7 +1933,7 @@ registering any webhook subscription. The validation enforces:
   metadata endpoints (169.254.169.254) are all rejected.
 
 Any call to `create_rest_hook` with an invalid target URL will return an
-`{"error": "..."}` response and no webhook will be created. The same
+`isError=true` response with a safe explanation, and no webhook will be created. The same
 validation applies to `update_rest_hook` when a new `target_url` is supplied.
 
 **Agent guidance**: when registering webhooks, only use publicly routable
@@ -1947,6 +1990,87 @@ and any notes flagging billing issues. Note: webhooks in this server validate ta
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
+
+
+_original_call_tool = mcp.call_tool
+_original_read_resource = mcp.read_resource
+
+
+async def _safe_call_tool(name, arguments, context=None):
+    write_prefixes = (
+        "create_",
+        "update_",
+        "delete_",
+        "set_",
+        "add_",
+        "remove_",
+        "send_",
+        "post_",
+        "put_",
+        "patch_",
+        "assign_",
+        "unassign_",
+        "complete_",
+        "cancel_",
+        "archive_",
+        "activate_",
+        "deactivate_",
+        "close_",
+        "reopen_",
+        "upload_",
+        "link_",
+        "unlink_",
+        "execute_",
+        "run_",
+        "fire_",
+    )
+    token = _active_tool_is_write.set(name.startswith(write_prefixes))
+    retry_token = _active_retry_budget.set(RetryBudget())
+    try:
+        return await _original_call_tool(name, arguments, context)
+    except Exception as exc:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        if type(exc) is ToolError and isinstance(exc.__cause__, ValidationError):
+            tool = mcp._tool_manager.get_tool(name)
+            properties = tool.parameters.get("properties", {}) if tool else {}
+            cause = cast(ValidationError, exc.__cause__)
+            for error in cause.errors(include_input=False, include_url=False):
+                location = error.get("loc", ())
+                field = location[0] if location else None
+                if field in properties:
+                    spec = properties[field]
+                    expected = spec.get("type", "the documented shape")
+                    if "minimum" in spec:
+                        expected += f" greater than or equal to {spec['minimum']}"
+                    if "maximum" in spec:
+                        expected += f" and less than or equal to {spec['maximum']}"
+                    raise ToolError(
+                        f"Invalid argument '{field}'; expected {expected}."
+                    ) from None
+            raise ToolError(
+                "Invalid arguments; use the documented input schema."
+            ) from None
+        raise _safe_tool_error(exc) from None
+    finally:
+        _active_tool_is_write.reset(token)
+        _active_retry_budget.reset(retry_token)
+
+
+async def _safe_read_resource(uri, context=None):
+    try:
+        return await _original_read_resource(uri, context)
+    except Exception as exc:
+        from mcp.server.mcpserver.exceptions import ResourceNotFoundError
+
+        if isinstance(exc, ResourceNotFoundError):
+            raise
+        # Never let SDK logging expose an underlying exception or URL.
+        raise SafeResourceError(SAFE_FALLBACK) from None
+
+
+mcp.call_tool = _safe_call_tool
+mcp.read_resource = _safe_read_resource
 
 
 def main():

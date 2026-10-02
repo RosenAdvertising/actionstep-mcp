@@ -24,6 +24,7 @@ MCP server for [Actionstep](https://actionstep.com) — 144 tools covering the f
 ## Requirements
 
 - Python 3.10+
+- Python MCP SDK >=2.2,<3 (the protocol target is 2026-07-28)
 - Claude Desktop (or any MCP-compatible client)
 - Actionstep developer credentials (Client ID, Client Secret)
 
@@ -72,12 +73,15 @@ via the cross-platform [`keyring`](https://github.com/jaraco/keyring) library:
 | Windows | Credential Manager                       |
 | Linux   | Secret Service (GNOME Keyring / KWallet) |
 
-Secrets are saved under the service name `actionstep-mcp`. Nothing is written to
-disk in clear text.
+Secrets saved to keyring use the service name `actionstep-mcp`.
 
 **File fallback.** On a host with no keyring backend (e.g. a headless Linux box
 without Secret Service), or if you set `ACTIONSTEP_MCP_USE_KEYRING=0`, credentials
 fall back to a `~/.actionstep-mcp/.env` file with `0600` permissions.
+
+On Windows, the file is stored in the user's profile and protected by Windows'
+default per-user access rules. On POSIX, files are created with `0600` permissions
+and writes fail closed if private permissions cannot be established.
 
 **Read order.** Credentials resolve in the order OS keyring → process environment
 → `.env` file. So a rotated secret in the keyring always wins, and an
@@ -105,3 +109,23 @@ Actionstep uses a dynamic `api_endpoint` — the URL for your organisation's API
 MIT
 
 <!-- ci-trigger 2026-05-27 -->
+
+### Approved destination URLs
+
+Set `ACTIONSTEP_ALLOWED_DESTINATION_HOSTS` in the server environment, for example
+`ACTIONSTEP_ALLOWED_DESTINATION_HOSTS=hooks.firm.example,.integrations.firm.example`.
+Comma-separated exact hosts allow only that host; a leading dot allows the domain
+and its subdomains. Matching ignores case and trailing dots and normalizes IDNA.
+An empty or unset list refuses destination URLs before any request. HTTPS, no
+userinfo, and public literal addresses remain required. This administrator-owned
+list prevents model-supplied destinations from sending data to arbitrary hosts,
+including private-address DNS aliases and unapproved redirectors. Approve only
+hosts whose DNS and redirects the firm trusts; the vendor executes requests later.
+Tools cannot change this setting.
+
+Configured API endpoints may use any host under `actionstep.com` or
+`actionstepstaging.com`, including per-organization and regional hosts such as
+`ap-southeast-2.actionstep.com` (or `actionstepstaging.com` for staging),
+with no userinfo, query, fragment, or non-default port. Both an origin and the
+vendor-returned `/api/` base are accepted. See the
+[Actionstep authentication documentation](https://docs.actionstep.com/authentication).

@@ -12,6 +12,7 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from threading import Lock
 
 import requests
 
@@ -26,6 +27,7 @@ from actionstep_mcp.url_security import (
 from actionstep_mcp.private_file import write_private_file
 
 logger = logging.getLogger(__name__)
+_TOKEN_REFRESH_LOCK = Lock()
 
 
 def _path_id(value, parameter: str) -> str:
@@ -156,6 +158,17 @@ class TokenManager:
         return self.tokens.get("refresh_token", "")
 
     def refresh(self):
+        # HTTP tools run in worker threads with separate TokenManager instances.
+        # Serialize rotation and reuse tokens another request has already saved.
+        with _TOKEN_REFRESH_LOCK:
+            if getattr(self, "token_file", None) is not None:
+                latest = self._load()
+                if latest != self.tokens and latest.get("access_token"):
+                    self.tokens = latest
+                    return latest
+            return self._refresh()
+
+    def _refresh(self):
         if not self.refresh_token:
             _log_guard_rejection("refresh_token_missing")
             raise RuntimeError("No refresh token. Run: actionstep-mcp-setup")

@@ -2089,7 +2089,7 @@ def _requested_transport() -> str:
 
 
 def _host() -> str:
-    return os.environ.get("ACTIONSTEP_MCP_HOST", "127.0.0.1").strip()
+    return os.environ.get("ACTIONSTEP_MCP_HOST", "127.0.0.1").strip() or "127.0.0.1"
 
 
 def _port() -> int:

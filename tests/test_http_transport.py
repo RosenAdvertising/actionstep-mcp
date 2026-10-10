@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from threading import Barrier
 from unittest.mock import Mock
 
 import httpx
 import pytest
+import requests
 from mcp import Client, StdioServerParameters
 
 from actionstep_mcp import __version__, server
+from actionstep_mcp import client as vendor
 from actionstep_mcp.client import ActionstepClient, _active_retry_budget
 from tests.test_spec_2026_07_28 import (
     PROTOCOL_VERSION,
@@ -348,3 +353,86 @@ def test_tool_cancellation_propagates_and_resets_request_context(monkeypatch):
         assert _active_retry_budget.get() is None
 
     asyncio.run(check())
+
+
+# ---------------------------------------------------------------------------
+# Spec v1 security-review regressions: empty env values, host spelling,
+# import-time version, and serialised token refresh (F3, F4, F7, F8, F5)
+# ---------------------------------------------------------------------------
+
+
+def test_empty_transport_selects_stdio(monkeypatch):
+    monkeypatch.setenv("ACTIONSTEP_MCP_TRANSPORT", "")
+    assert server._requested_transport() == "stdio"
+    monkeypatch.setenv("ACTIONSTEP_MCP_TRANSPORT", "   ")
+    assert server._requested_transport() == "stdio"
+
+    run = Mock()
+    monkeypatch.setattr(server.mcp, "run", run)
+    monkeypatch.setenv("ACTIONSTEP_MCP_TRANSPORT", "")
+    server.main()
+    run.assert_called_once_with()
+
+
+def test_empty_host_yields_loopback_default(monkeypatch):
+    monkeypatch.setenv("ACTIONSTEP_MCP_HOST", "")
+    assert server._host() == "127.0.0.1"
+    assert server._transport_security() is None
+    monkeypatch.setenv("ACTIONSTEP_MCP_HOST", "   ")
+    assert server._host() == "127.0.0.1"
+
+
+def test_uppercase_localhost_exits_without_allowed_hosts(monkeypatch):
+    monkeypatch.setenv("ACTIONSTEP_MCP_HOST", "LOCALHOST")
+    monkeypatch.delenv("ACTIONSTEP_MCP_ALLOWED_HOSTS", raising=False)
+    assert server._host() == "LOCALHOST"
+    with pytest.raises(SystemExit) as caught:
+        server.create_serve_app()
+    assert "ACTIONSTEP_MCP_ALLOWED_HOSTS" in str(caught.value)
+
+
+def test_server_import_survives_missing_distribution_metadata(monkeypatch):
+    """A fresh import must survive absent distribution metadata (review F8)."""
+
+    def missing(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+    saved_server = sys.modules.pop("actionstep_mcp.server", None)
+    saved_package = sys.modules.pop("actionstep_mcp", None)
+    try:
+        imported = importlib.import_module("actionstep_mcp.server")
+        assert isinstance(imported.__version__, str) and imported.__version__
+    finally:
+        if saved_package is not None:
+            sys.modules["actionstep_mcp"] = saved_package
+        if saved_server is not None:
+            sys.modules["actionstep_mcp.server"] = saved_server
+
+
+def test_concurrent_refresh_calls_the_vendor_refresh_once(monkeypatch, tmp_path):
+    monkeypatch.setattr(vendor, "CONFIG_DIR", tmp_path)
+    (tmp_path / "tokens.json").write_text(
+        '{"access_token": "initial-access", "refresh_token": "initial-refresh"}'
+    )
+    managers = [vendor.TokenManager(), vendor.TokenManager()]
+    response = requests.Response()
+    response.status_code = 200
+    response._content = (
+        b'{"access_token": "rotated-access", "refresh_token": "rotated-refresh"}'
+    )
+    post = Mock(return_value=response)
+    monkeypatch.setattr(vendor.requests, "post", post)
+    ready = Barrier(2)
+
+    def refresh(manager):
+        ready.wait(timeout=5)
+        return manager.refresh()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(refresh, managers))
+    assert post.call_count == 1
+    assert post.call_args.kwargs["data"]["refresh_token"] == "initial-refresh"
+    assert (
+        results[0] == results[1] == json.loads((tmp_path / "tokens.json").read_text())
+    )

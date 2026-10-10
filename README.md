@@ -24,7 +24,7 @@ MCP server for [Actionstep](https://actionstep.com) — 144 tools covering the f
 ## Requirements
 
 - Python 3.10+
-- Python MCP SDK >=2.2,<3 (the protocol target is 2026-07-28)
+- Python MCP SDK >=2.3,<3 (the protocol target is 2026-07-28)
 - Claude Desktop (or any MCP-compatible client)
 - Actionstep developer credentials (Client ID, Client Secret)
 
@@ -61,6 +61,36 @@ actionstep-mcp-verify
   }
 }
 ```
+
+## HTTP mode
+
+Stdio is the default. To serve stateless Streamable HTTP, use these server
+environment variables. The MCP endpoint is `/mcp` and supports both the
+2026-07-28 protocol and legacy clients through the SDK.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ACTIONSTEP_MCP_TRANSPORT` | `stdio` | Set to `streamable-http` for HTTP. |
+| `ACTIONSTEP_MCP_HOST` | `127.0.0.1` | Bind address; SDK protection applies to `127.0.0.1`, `localhost`, and `::1`. |
+| `PORT` | `8080` | Integer HTTP port. |
+| `ACTIONSTEP_MCP_ALLOWED_HOSTS` | Unset | Required outside the SDK's loopback addresses; comma-separated allowed Host headers, including ports, such as `mcp.example:8080` or `mcp.example:*`. |
+| `ACTIONSTEP_MCP_ALLOWED_ORIGINS` | Unset | Optional comma-separated allowed Origins, such as `https://app.example`. Outside loopback, any supplied Origin is refused unless allowed; requests without Origin are accepted. |
+| `ACTIONSTEP_CLIENT_ID` | Existing credential store | Actionstep OAuth client ID. |
+| `ACTIONSTEP_CLIENT_SECRET` | Existing credential store | Actionstep OAuth client secret. |
+| `ACTIONSTEP_API_ENDPOINT` | Existing credential store or OAuth token file | Organisation's Actionstep API endpoint. |
+| `ACTIONSTEP_MCP_USE_KEYRING` | `1` | Set to `0` to use environment credentials and file fallback on a headless host. |
+| `ACTIONSTEP_ALLOWED_DESTINATION_HOSTS` | Unset | Existing administrator allowlist for webhook destinations (see below). |
+
+After the existing OAuth setup, run:
+
+```bash
+ACTIONSTEP_MCP_TRANSPORT=streamable-http PORT=8080 actionstep-mcp
+```
+
+Connect the HTTP client to `http://127.0.0.1:8080/mcp`. HTTP uses the same
+server-side credentials and OAuth token storage as stdio. Vendor credentials
+are never taken from HTTP requests. Responses use the SDK's default streaming
+mode so disconnects cancel requests.
 
 ## Credential storage
 

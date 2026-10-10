@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["actionstep", "mcp", "legal", "law", "claude", "practice-management"]
 dependencies = [
-    "mcp>=2.2,<3",
+    "mcp>=2.3,<3",
     "pydantic>=2.13,<3",
     "requests>=2.34.2",
     "keyring>=25.7.0",

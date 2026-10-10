@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Actionstep MCP Server — full Actionstep API coverage via MCPServer."""
 
+import asyncio
 import json
+import os
 from contextvars import ContextVar
 from typing import Annotated, cast
 
 from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field, ValidationError
+from starlette.applications import Starlette
 
+from . import __version__
 from .client import ActionstepClient, RetryBudget, _active_retry_budget
 from .errors import SafeResourceError, SAFE_FALLBACK, safe_error
 
@@ -24,7 +29,8 @@ def _safe_tool_error(exc: Exception):
 
 mcp = MCPServer(
     "actionstep-mcp",
-    version="0.2.0",
+    title="Actionstep MCP",
+    version=__version__,
     instructions=(
         "Full access to Actionstep practice management: actions (matters), participants "
         "(contacts), tasks, time records, time entries, disbursements, calendar, emails, "
@@ -2073,5 +2079,85 @@ mcp.call_tool = _safe_call_tool
 mcp.read_resource = _safe_read_resource
 
 
+STREAMABLE_HTTP_TRANSPORT = "streamable-http"
+
+
+def _requested_transport() -> str:
+    return (
+        os.environ.get("ACTIONSTEP_MCP_TRANSPORT", "stdio").strip().lower() or "stdio"
+    )
+
+
+def _host() -> str:
+    return os.environ.get("ACTIONSTEP_MCP_HOST", "127.0.0.1").strip()
+
+
+def _port() -> int:
+    raw = os.environ.get("PORT", "8080").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        raise SystemExit(f"PORT must be an integer, got {raw!r}") from None
+
+
+def _transport_security() -> TransportSecuritySettings | None:
+    # These are the loopback names for which the SDK enables protection itself.
+    if _host() in ("127.0.0.1", "localhost", "::1"):
+        return None
+    allowed_hosts = [
+        value.strip()
+        for value in os.environ.get("ACTIONSTEP_MCP_ALLOWED_HOSTS", "").split(",")
+        if value.strip()
+    ]
+    if not allowed_hosts:
+        raise SystemExit(
+            "ACTIONSTEP_MCP_ALLOWED_HOSTS is required for a non-loopback "
+            "ACTIONSTEP_MCP_HOST; set comma-separated allowed Host headers."
+        )
+    allowed_origins = [
+        value.strip()
+        for value in os.environ.get("ACTIONSTEP_MCP_ALLOWED_ORIGINS", "").split(",")
+        if value.strip()
+    ]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
+def create_serve_app() -> Starlette:
+    """Build the stateless MCP HTTP app with SDK disconnect cancellation."""
+    return mcp.streamable_http_app(
+        streamable_http_path="/mcp",
+        host=_host(),
+        stateless_http=True,
+        transport_security=_transport_security(),
+    )
+
+
+async def _serve_streamable_http() -> None:
+    import uvicorn
+
+    config = uvicorn.Config(
+        create_serve_app(),
+        host=_host(),
+        port=_port(),
+        log_level=mcp.settings.log_level.lower(),
+        access_log=False,
+    )
+    await uvicorn.Server(config).serve()
+
+
 def main():
-    mcp.run()
+    transport = _requested_transport()
+    if transport == "stdio":
+        mcp.run()
+        return
+    if transport == STREAMABLE_HTTP_TRANSPORT:
+        asyncio.run(_serve_streamable_http())
+        return
+    raise SystemExit(
+        "Unsupported ACTIONSTEP_MCP_TRANSPORT "
+        f"{transport!r}; expected 'stdio' or '{STREAMABLE_HTTP_TRANSPORT}'."
+    )

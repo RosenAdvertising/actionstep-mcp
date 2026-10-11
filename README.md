@@ -1,3 +1,5 @@
+<p align="center"><a href="https://rosenadvertising.com/datalink/?utm_source=github&utm_medium=readme-banner&utm_campaign=actionstep-mcp"><img src="https://image.rosenadvertising.com/datalink/readme-banner-v2.png" alt="DataLink by Rosen Advertising: don't want to install and run this yourself? Get it hosted." width="100%"></a></p>
+
 # Actionstep MCP server
 
 [![CI](https://github.com/RosenAdvertising/actionstep-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/RosenAdvertising/actionstep-mcp/actions/workflows/ci.yml)
